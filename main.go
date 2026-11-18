@@ -48,6 +48,7 @@ type forge struct {
 	repos           map[string]*repo
 	next, issue, pr int
 	gitRoot         string
+	objects         *objectStore
 	reviews         map[string][]review
 	protections     map[string]protection
 }

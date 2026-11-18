@@ -20,7 +20,7 @@ const (
 func EncodePktLine(payload []byte) []byte {
 	// The length includes this four-byte header, as required by Git's wire format.
 	if len(payload) == 0 {
-		return []byte("0000")
+		return EncodeControlPacket(PacketFlush)
 	}
 	length := len(payload) + 4
 	if length > 0xffff {

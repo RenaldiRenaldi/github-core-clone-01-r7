@@ -13,6 +13,17 @@ import (
 )
 
 func apiForge() *forge { f := &forge{repos: map[string]*repo{}}; f.seedAPI(); return f }
+
+func TestHealthResponseRemainsAvailable(t *testing.T) {
+	f := apiForge()
+	r := httptest.NewRequest("GET", "/healthz", nil)
+	w := httptest.NewRecorder()
+	f.ServeHTTP(w, r)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Fatalf("health response = %d %s", w.Code, w.Body)
+	}
+}
+
 func callJSON(t *testing.T, f *forge, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	b, _ := json.Marshal(body)

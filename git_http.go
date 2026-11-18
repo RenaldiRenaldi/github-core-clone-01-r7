@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,13 @@ func (f *forge) serveGit(w http.ResponseWriter, r *http.Request) bool {
 	if len(parts) != 2 {
 		http.NotFound(w, r)
 		return true
+	}
+	if strings.HasSuffix(parts[1], ".git/info/refs") {
+		service := r.URL.Query().Get("service")
+		if service == "git-upload-pack" || service == "git-receive-pack" {
+			f.advertiseRefs(w, service)
+			return true
+		}
 	}
 	project := filepath.Join(f.gitRoot, parts[0], strings.TrimSuffix(parts[1], "/info/refs"))
 	if strings.HasSuffix(parts[1], "/git-upload-pack") {
@@ -121,37 +129,81 @@ func (f *forge) staleReceivePack(repoPath string, body []byte) (bool, string) {
 
 // seedDemo creates a deterministic bare repository with a short history.
 func (f *forge) seedDemo() {
-	// Keep the in-memory API fixture and Git fixture aligned on the demo repo.
-	work := filepath.Join(f.gitRoot, "octocat", "demo-work")
-	bare := filepath.Join(f.gitRoot, "octocat", "hello-world.git")
-	if err := os.MkdirAll(filepath.Dir(bare), 0755); err != nil {
+	store := newObjectStore()
+	f.objects = store
+	blobReadme, _ := store.WriteObject("blob", []byte("# Hello World\n\nA tiny demo repository.\n"))
+	blobHello, _ := store.WriteObject("blob", []byte("Hello from the Go forge.\n"))
+	readmeTree, _ := store.WriteObject("tree", []byte(treeEntry("100644", "README.md", blobReadme)))
+	first, _ := store.WriteObject("commit", []byte(demoCommit(readmeTree, "", "Initial demo")))
+	secondTree, _ := store.WriteObject("tree", []byte(treeEntry("100644", "README.md", blobReadme)+treeEntry("100644", "hello.txt", blobHello)))
+	second, _ := store.WriteObject("commit", []byte(demoCommit(secondTree, first, "Add greeting")))
+	if err := store.UpdateRef("refs/heads/main", second, ""); err != nil {
 		panic(err)
 	}
-	run := func(dir string, args ...string) {
-		c := exec.Command("git", args...)
-		c.Dir = dir
-		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Demo", "GIT_AUTHOR_EMAIL=demo@example.test", "GIT_COMMITTER_NAME=Demo", "GIT_COMMITTER_EMAIL=demo@example.test", "GIT_AUTHOR_DATE=2025-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2025-01-01T00:00:00Z")
-		if b, e := c.CombinedOutput(); e != nil {
-			panic(fmt.Sprintf("git %v: %s (%v)", args, b, e))
+	// Keep the existing CGI-backed transfer and merge paths usable without
+	// invoking Git during startup: publish canonical loose files directly.
+	bare := filepath.Join(f.gitRoot, "octocat", "hello-world.git")
+	if err := os.MkdirAll(filepath.Join(bare, "objects"), 0755); err != nil {
+		panic(err)
+	}
+	for id, encoded := range store.objects {
+		dir := filepath.Join(bare, "objects", id[:2])
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			panic(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, id[2:]), encoded, 0444); err != nil {
+			panic(err)
 		}
 	}
-	if err := os.MkdirAll(work, 0755); err != nil {
+	refPath := filepath.Join(bare, "refs", "heads", "main")
+	if err := os.MkdirAll(filepath.Dir(refPath), 0755); err != nil {
 		panic(err)
 	}
-	run(work, "init", "-b", "main")
-	run(work, "config", "user.name", "Demo")
-	run(work, "config", "user.email", "demo@example.test")
-	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("# Hello World\n\nA tiny demo repository.\n"), 0644); err != nil {
+	if err := os.WriteFile(refPath, []byte(second+"\n"), 0644); err != nil {
 		panic(err)
 	}
-	run(work, "add", "README.md")
-	run(work, "commit", "-m", "Initial demo")
-	if err := os.WriteFile(filepath.Join(work, "hello.txt"), []byte("Hello from the Go forge.\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(bare, "HEAD"), []byte("ref: refs/heads/main\n"), 0644); err != nil {
 		panic(err)
 	}
-	run(work, "add", "hello.txt")
-	run(work, "commit", "-m", "Add greeting")
-	run(work, "clone", "--bare", ".", bare)
-	run(bare, "config", "http.receivepack", "true")
-	_ = os.RemoveAll(work)
+	config := "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n[http]\n\treceivepack = true\n"
+	if err := os.WriteFile(filepath.Join(bare, "config"), []byte(config), 0644); err != nil {
+		panic(err)
+	}
+}
+
+func treeEntry(mode, name, id string) string { return mode + " " + name + "\x00" + string(mustHex(id)) }
+func mustHex(id string) []byte {
+	b, err := hex.DecodeString(id)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+func demoCommit(tree, parent, message string) string {
+	body := "tree " + tree + "\n"
+	if parent != "" {
+		body += "parent " + parent + "\n"
+	}
+	return body + "author Demo <demo@example.test> 1735689600 +0000\ncommitter Demo <demo@example.test> 1735689600 +0000\n\n" + message + "\n"
+}
+
+func (f *forge) advertiseRefs(w http.ResponseWriter, service string) {
+	if f.objects == nil {
+		http.NotFound(w, nil)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-"+service+"-advertisement")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(EncodePktLine([]byte("# service=" + service + "\n")))
+	_, _ = w.Write(EncodeControlPacket(PacketFlush))
+	refs := f.objects.HeadRefs()
+	capabilities := "multi_ack multi_ack_detailed thin-pack side-band side-band-64k ofs-delta agent=git-core-clone/1"
+	if len(refs) > 0 {
+		_, _ = w.Write(EncodePktLine([]byte(refs[0].id + " " + refs[0].name + "\x00" + capabilities + "\n")))
+		for _, ref := range refs[1:] {
+			_, _ = w.Write(EncodePktLine([]byte(ref.id + " " + ref.name + "\n")))
+		}
+	}
+	_, _ = w.Write(EncodeControlPacket(PacketFlush))
 }

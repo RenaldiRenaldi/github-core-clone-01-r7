@@ -18,6 +18,7 @@ var mcpTools = []map[string]any{
 }
 
 func httptestRequest(method, path string, body []byte) *http.Request {
+	// Keep API fixtures and live handlers on the same request construction path.
 	return httptest.NewRequest(method, path, bytes.NewReader(body))
 }
 func httptestRecorder() *httptest.ResponseRecorder { return httptest.NewRecorder() }

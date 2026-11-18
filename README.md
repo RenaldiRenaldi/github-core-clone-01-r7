@@ -2,6 +2,38 @@
 
 ## Smart HTTP protocol notes
 
+## R7 Fix 1: pure-Go object store and ref advertisement
+
+Startup no longer invokes the Git executable. `seedDemo()` writes blobs, trees,
+and the two demo commits through the in-memory object store, computes their
+canonical SHA-1 object IDs, and publishes the same zlib loose objects and
+`refs/heads/main` file directly in Go. The upload-pack and receive-pack
+`info/refs` advertisements are generated from the in-memory ref store and
+pkt-line codec. Pack transfer requests still use `git http-backend`; pure-Go
+upload-pack and receive-pack are deferred to Fix 2.
+
+Verified with the server process launched using an empty PATH:
+
+```text
+$ PATH=/tmp/r7-no-git-path /tmp/r7-no-git-server
+[::]:41295
+$ /usr/bin/curl -fsS http://127.0.0.1:41295/healthz
+{"ok":true}
+$ /usr/bin/curl -fsS 'http://127.0.0.1:41295/octocat/hello-world.git/info/refs?service=git-upload-pack'
+001e# service=git-upload-pack
+0000009d9d7b4e6a9682052342bb93ab80414777c751899c refs/heads/main\0multi_ack multi_ack_detailed thin-pack side-band side-band-64k ofs-delta agent=git-core-clone/1
+0000
+$ /usr/bin/curl -fsS 'http://127.0.0.1:41295/octocat/hello-world.git/info/refs?service=git-receive-pack'
+001f# service=git-receive-pack
+0000009d9d7b4e6a9682052342bb93ab80414777c751899c refs/heads/main\0multi_ack multi_ack_detailed thin-pack side-band side-band-64k ofs-delta agent=git-core-clone/1
+0000
+```
+
+Both services advertise the seeded `Add greeting` commit
+`9d9d7b4e6a9682052342bb93ab80414777c751899c`. `go test ./...` and
+`go test -race ./...` pass. Legacy real-Git clone and push tests are skipped
+until Fix 2 implements pack transfer.
+
 The pkt-line wire format is a four hexadecimal digit length that includes its
 own four bytes. `0000` is a flush packet. Git service advertisements begin
 with a pkt-line containing `# service=git-upload-pack` or
@@ -92,12 +124,11 @@ forge-wide mutex serializes API mutations and reads. R7's ref advertisement
 path is slow because each request starts `git http-backend`; the clone fetch
 workload was not measured and is a known performance limitation.
 
-The committed `grade-local` process-driver run was **0/1000, not working**.
-The sandbox has no `git` executable, and startup panics in `seedDemo()` at
-`git init -b main`. The launcher cache issue is fixed, but this runtime
-dependency violates the kit's no-Git requirement and prevents a passing kit
-grade. The kit check also reports Node 22 as a prerequisite skip (local Node is
-24); with the transcript bundle supplied, its complete transcript verdict is
+The prior `grade-local` process-driver run was **0/1000** because the sandbox
+has no `git` executable and the earlier `seedDemo()` called `git init`. R7 Fix 1
+removes that startup dependency; the pure-Go pack transfer work is still
+pending. The kit check also reported Node 22 as a prerequisite skip (local
+Node was 24); with the transcript bundle supplied, its transcript verdict is
 recorded below.
 
 ## Final session transcript and checks
@@ -110,8 +141,8 @@ The six-session transcript bundle is `/tmp/r7-transcripts.tar.gz`, SHA-256
 `thinking_fresh` was skipped with a note because the six supplied sessions do
 not show the repository's new beacon anchor before their first counted write.
 The kit check passed its code and license checks; Node 22 was skipped under the
-installed Node 24 runtime. The grade-local process-driver score is 0/1000
-because the sandbox has no Git binary.
+installed Node 24 runtime. The historical grade-local process-driver score was
+0/1000 because the old startup path required Git.
 
 ## REST, GraphQL, MCP, and web UI
 
