@@ -233,9 +233,10 @@ The kit's grade-local run and final transcript checks are recorded below.
 
 ## Grade-local and final transcript checks
 
-Fix 5's latest committed static-binary process grade is **526/1000** at
-`f09ef7c` (41/120 feature checks; agent 133, feature 205, performance 188,
-`perf_p50_us` 233,363). L1 replay reproduced byte-for-byte. The protocol v2
+Fix 5's latest committed static-binary process grade is **490/1000** at
+`8e3a99d` (41/120 feature checks; agent 133, feature 205, performance 152,
+`perf_p50_us` 387,762). A previous draw of the same functional code scored
+526/1000 as the loopback timings vary. L1 replay reproduced byte-for-byte. The protocol v2
 advertisement, depth-1 shallow fetch, shallow new-tip fetch, and shallow deepen
 checks pass. The target of 950 was not reached. The remaining failed checks
 reported by the public harness are:
@@ -253,10 +254,10 @@ reported by the public harness are:
 The harness export records check pass bits but no per-check assertion text.
 These failures are outside upload-pack shallow negotiation; this session fixed
 the shallow v2 fetch/deepen path and did not implement the broader API and ref
-behaviors named above. Performance measurements from this run were push
-636.484 ms / 200 operations, clone 81.748 ms / 50, reads 666.924 ms / 2,000,
-and writes 85.465 ms / 200. The separate cached v2 fetch loopback measurement
-above was 2,087.1 requests/sec.
+behaviors named above. The latest grade draw measured push 1,037.535 ms / 200
+operations, clone 124.794 ms / 50, reads 938.996 ms / 2,000, and writes
+185.952 ms / 200. The separate cached v2 fetch loopback measurement above was
+2,087.1 requests/sec.
 
 The Fix 5 transcript bundle is
 `/home/hatch/workspace/makefun/github-core-clone-01-r7-fix5-final.tar.gz`.
