@@ -18,8 +18,36 @@ flush marker at the correct protocol boundary. R7's pkt-line codec now has
 explicit flush, delimiter, and response-end constructors, plus regression
 coverage that checks a control packet does not consume the next packet.
 
-## Current implementation state
+## Smart HTTP clone and push
 
-This checkout contains the pkt-line codec and focused tests. The complete
-forge surfaces, real-git integration run, performance measurements, and kit
-transcript check have not been completed in this round.
+The Go server seeds `octocat/hello-world.git` at startup with two deterministic
+commits. Smart HTTP requests are routed to Git's `http-backend`, which handles
+pkt-line framing, pack generation and validation, loose object storage, and
+branch ref updates. The server exposes the normal upload-pack and receive-pack
+URLs below the repository path.
+
+Verified with the stock Git CLI (server port assigned at startup):
+
+```text
+$ git clone http://127.0.0.1:45151/octocat/hello-world.git /tmp/r7-clone-test2
+Cloning into '/tmp/r7-clone-test2'...
+9d7b4e6 Add greeting
+497de37 Initial demo
+$ cd /tmp/r7-clone-test2
+$ git commit -m 'Test push'
+[main a3c2a55] Test push
+ 1 file changed, 1 insertion(+)
+ create mode 100644 pushed.txt
+$ git push origin main
+To http://127.0.0.1:45151/octocat/hello-world.git
+   9d7b4e6..a3c2a55  main -> main
+$ git ls-remote origin refs/heads/main
+a3c2a55e8ab2d8de6734c47fc9b3c604f946cb1f refs/heads/main
+$ git clone -q http://127.0.0.1:45151/octocat/hello-world.git /tmp/r7-clone-verify
+$ git -C /tmp/r7-clone-verify log -1 --oneline
+a3c2a55 Test push
+```
+
+Checks: `go test ./...` and `go test -race ./...` both pass. The focused
+handler tests verify the upload-pack advertisement and clone a checkout through
+an in-process HTTP server.

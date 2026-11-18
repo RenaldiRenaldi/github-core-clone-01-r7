@@ -19,9 +19,13 @@ type repo struct {
 type forge struct {
 	repos       map[string]*repo
 	next, issue int
+	gitRoot     string
 }
 
 func (f *forge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if f.serveGit(w, r) {
+		return
+	}
 	w.Header().Set("X-GitHub-Request-Id", "R7-FORGE")
 	w.Header().Set("Content-Type", "application/json")
 	if r.URL.Path == "/healthz" {
@@ -119,7 +123,12 @@ func (q *repo) json() map[string]any {
 	return map[string]any{"id": q.ID, "name": q.Name, "full_name": q.Owner + "/" + q.Name, "owner": map[string]string{"login": q.Owner}, "description": q.Description, "private": false, "default_branch": "main"}
 }
 func main() {
-	f := &forge{repos: map[string]*repo{}}
+	root, err := os.MkdirTemp("", "r7-git-data-")
+	if err != nil {
+		panic(err)
+	}
+	f := &forge{repos: map[string]*repo{}, gitRoot: root}
+	f.seedDemo()
 	l, e := net.Listen("tcp", ":0")
 	if e != nil {
 		panic(e)

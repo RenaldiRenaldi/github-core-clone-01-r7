@@ -15,7 +15,8 @@ const (
 	PacketResponseEnd
 )
 
-// EncodePktLine writes a payload with its four-byte hexadecimal size prefix.
+// EncodePktLine writes a Git data packet. Empty payloads encode as flushes;
+// callers that need delimiter or response-end markers use EncodeControlPacket.
 func EncodePktLine(payload []byte) []byte {
 	if len(payload) == 0 {
 		return []byte("0000")

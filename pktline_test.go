@@ -92,3 +92,9 @@ func TestMalformedAndShortPktLines(t *testing.T) {
 		}
 	}
 }
+
+func TestPktLineRejectsOversizePayload(t *testing.T) {
+	if got := EncodePktLine(bytes.Repeat([]byte{'x'}, 0xffff-3)); got != nil {
+		t.Fatalf("oversize packet length = %d, want nil", len(got))
+	}
+}
