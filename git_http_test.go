@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -226,6 +227,109 @@ func TestDepthLimitedPackAndBoundary(t *testing.T) {
 	}
 	if commits != 2 {
 		t.Fatalf("depth-2 pack has %d commits, want 2", commits)
+	}
+}
+
+func TestUploadPackV2ShallowExchange(t *testing.T) {
+	f := testForge(t)
+	previous, _ := f.objects.ReadRefIn("octocat/hello-world", "refs/heads/main")
+	_, tipData, err := f.objects.ReadObject(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, tree := "", ""
+	for _, line := range strings.Split(string(tipData), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "parent" {
+			parent = fields[1]
+		}
+		if len(fields) == 2 && fields[0] == "tree" {
+			tree = fields[1]
+		}
+	}
+	if parent == "" || tree == "" {
+		t.Fatal("seed tip is missing its parent or tree")
+	}
+	tip, err := f.objects.WriteObject("commit", []byte(demoCommit(tree, previous, "Third demo commit")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.objects.UpdateRefIn("octocat/hello-world", "refs/heads/main", tip, previous); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		depth int
+		want  string
+	}{
+		{depth: 1, want: tip},
+		{depth: 2, want: previous},
+	} {
+		var request bytes.Buffer
+		request.Write(EncodePktLine([]byte("command=fetch\n")))
+		request.Write(EncodePktLine([]byte("agent=git/test\n")))
+		request.Write(EncodeControlPacket(PacketDelimiter))
+		request.Write(EncodePktLine([]byte("deepen " + strconv.Itoa(tc.depth) + "\n")))
+		request.Write(EncodePktLine([]byte("want " + tip + "\n")))
+		request.Write(EncodePktLine([]byte("done\n")))
+		request.Write(EncodeControlPacket(PacketFlush))
+		r := httptest.NewRequest("POST", "/git-upload-pack", &request)
+		r.Header.Set("Git-Protocol", "version=2")
+		w := httptest.NewRecorder()
+		f.handleUploadPackFor(w, r, "octocat/hello-world")
+		if w.Code != 200 {
+			t.Fatalf("depth-%d upload status %d", tc.depth, w.Code)
+		}
+		response := bytes.NewReader(w.Body.Bytes())
+		line, err := DecodePktLine(response)
+		if err != nil || string(line) != "shallow-info\n" {
+			t.Fatalf("depth-%d first response packet = %q, %v", tc.depth, line, err)
+		}
+		line, err = DecodePktLine(response)
+		if err != nil || string(line) != "shallow "+tc.want+"\n" {
+			t.Fatalf("depth-%d shallow packet = %q, %v", tc.depth, line, err)
+		}
+		line, err = DecodePktLine(response)
+		if err != nil || len(line) != 0 {
+			t.Fatalf("depth-%d shallow delimiter = %q, %v", tc.depth, line, err)
+		}
+		line, err = DecodePktLine(response)
+		if err != nil || string(line) != "packfile\n" {
+			t.Fatalf("depth-%d pack marker = %q, %v", tc.depth, line, err)
+		}
+		var packed bytes.Buffer
+		for {
+			line, err = DecodePktLine(response)
+			if err != nil {
+				t.Fatalf("depth-%d pack framing: %v", tc.depth, err)
+			}
+			if line == nil {
+				break
+			}
+			if len(line) == 0 || line[0] != 1 {
+				t.Fatalf("depth-%d non-pack sideband packet %q", tc.depth, line)
+			}
+			packed.Write(line[1:])
+		}
+		copyStore := newObjectStore()
+		if err := copyStore.parsePack(packed.Bytes()); err != nil {
+			t.Fatalf("depth-%d invalid pack: %v", tc.depth, err)
+		}
+		if _, _, err := copyStore.ReadObject(tip); err != nil {
+			t.Fatalf("depth-%d pack missing tip: %v", tc.depth, err)
+		}
+		if tc.depth == 1 {
+			if _, _, err := copyStore.ReadObject(previous); err == nil {
+				t.Fatal("depth-1 pack includes commit outside requested depth")
+			}
+		} else {
+			if _, _, err := copyStore.ReadObject(previous); err != nil {
+				t.Fatalf("depth-2 pack missing parent: %v", err)
+			}
+			if _, _, err := copyStore.ReadObject(parent); err == nil {
+				t.Fatal("depth-2 pack includes commit outside requested depth")
+			}
+		}
 	}
 }
 

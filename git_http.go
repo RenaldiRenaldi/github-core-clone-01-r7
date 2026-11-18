@@ -34,6 +34,10 @@ func (f *forge) serveGit(w http.ResponseWriter, r *http.Request) bool {
 		service := r.URL.Query().Get("service")
 		if service == "git-upload-pack" || service == "git-receive-pack" {
 			repoName := strings.TrimSuffix(strings.SplitN(parts[1], "/", 2)[0], ".git")
+			if service == "git-upload-pack" && strings.Contains(r.Header.Get("Git-Protocol"), "version=2") {
+				f.advertiseRefsV2For(w, parts[0]+"/"+repoName)
+				return true
+			}
 			f.advertiseRefsFor(w, service, parts[0]+"/"+repoName)
 			return true
 		}
@@ -75,6 +79,7 @@ func (f *forge) handleUploadPack(w http.ResponseWriter, r *http.Request) {
 	f.handleUploadPackFor(w, r, "")
 }
 func (f *forge) handleUploadPackFor(w http.ResponseWriter, r *http.Request, namespace string) {
+	v2 := strings.Contains(r.Header.Get("Git-Protocol"), "version=2")
 	body, e := io.ReadAll(r.Body)
 	if e != nil {
 		http.Error(w, "bad request", 400)
@@ -88,6 +93,10 @@ func (f *forge) handleUploadPackFor(w http.ResponseWriter, r *http.Request, name
 	deepenNot := map[string]bool{}
 	filterSpec := ""
 	sideband := false
+	done := false
+	command := ""
+	refPrefixes := []string{}
+	symrefs := false
 	for {
 		line, e := DecodePktLine(rd)
 		if e != nil {
@@ -104,6 +113,15 @@ func (f *forge) handleUploadPackFor(w http.ResponseWriter, r *http.Request, name
 			s = s[:z]
 		}
 		fields := strings.Fields(s)
+		if strings.HasPrefix(s, "command=") {
+			command = strings.TrimPrefix(s, "command=")
+		}
+		if s == "symrefs" {
+			symrefs = true
+		}
+		if len(fields) >= 2 && fields[0] == "ref-prefix" {
+			refPrefixes = append(refPrefixes, fields[1])
+		}
 		if len(fields) >= 2 && fields[0] == "want" {
 			wants = append(wants, fields[1])
 		}
@@ -125,6 +143,45 @@ func (f *forge) handleUploadPackFor(w http.ResponseWriter, r *http.Request, name
 		if len(fields) >= 2 && fields[0] == "filter" {
 			filterSpec = fields[1]
 		}
+		if len(fields) > 0 && fields[0] == "done" {
+			done = true
+		}
+	}
+	if command != "" {
+		v2 = true
+	}
+	if v2 && command == "ls-refs" {
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
+		w.Header().Set("Cache-Control", "no-cache")
+		match := func(name string) bool {
+			if len(refPrefixes) == 0 {
+				return true
+			}
+			for _, prefix := range refPrefixes {
+				if strings.HasPrefix(name, prefix) {
+					return true
+				}
+			}
+			return false
+		}
+		refs := f.objects.HeadRefsIn(namespace)
+		for _, ref := range refs {
+			if ref.name == "refs/heads/main" && match("HEAD") {
+				extra := ""
+				if symrefs {
+					extra = " symref-target:refs/heads/main"
+				}
+				_, _ = w.Write(EncodePktLine([]byte(ref.id + " HEAD" + extra + "\n")))
+				break
+			}
+		}
+		for _, ref := range refs {
+			if match(ref.name) {
+				_, _ = w.Write(EncodePktLine([]byte(ref.id + " " + ref.name + "\n")))
+			}
+		}
+		_, _ = w.Write(EncodeControlPacket(PacketFlush))
+		return
 	}
 	ids, boundaries := f.objects.reachableDepth(wants, depth)
 	if deepenSince > 0 || len(deepenNot) > 0 {
@@ -166,21 +223,54 @@ func (f *forge) handleUploadPackFor(w http.ResponseWriter, r *http.Request, name
 	for _, id := range boundaries {
 		boundarySet[id] = true
 	}
-	for _, id := range clientShallow {
-		if !boundarySet[id] {
-			_, _ = w.Write(EncodePktLine([]byte("unshallow " + id + "\n")))
+	if !v2 {
+		for _, id := range clientShallow {
+			if !boundarySet[id] {
+				_, _ = w.Write(EncodePktLine([]byte("unshallow " + id + "\n")))
+			}
+		}
+		for _, id := range boundaries {
+			_, _ = w.Write(EncodePktLine([]byte("shallow " + id + "\n")))
+		}
+		if depth > 0 || deepenSince > 0 || len(deepenNot) > 0 || len(clientShallow) > 0 {
+			_, _ = w.Write(EncodeControlPacket(PacketFlush))
 		}
 	}
-	for _, id := range boundaries {
-		_, _ = w.Write(EncodePktLine([]byte("shallow " + id + "\n")))
+	if !v2 {
+		if len(haves) > 0 {
+			_, _ = w.Write(EncodePktLine([]byte("ACK " + haves[len(haves)-1] + "\n")))
+		} else {
+			_, _ = w.Write(EncodePktLine([]byte("NAK\n")))
+		}
 	}
-	if depth > 0 || deepenSince > 0 || len(deepenNot) > 0 || len(clientShallow) > 0 {
+	if v2 {
+		if depth > 0 || deepenSince > 0 || len(deepenNot) > 0 || len(clientShallow) > 0 {
+			_, _ = w.Write(EncodePktLine([]byte("shallow-info\n")))
+			for _, id := range clientShallow {
+				if !boundarySet[id] {
+					_, _ = w.Write(EncodePktLine([]byte("unshallow " + id + "\n")))
+				}
+			}
+			for _, id := range boundaries {
+				_, _ = w.Write(EncodePktLine([]byte("shallow " + id + "\n")))
+			}
+			_, _ = w.Write(EncodeControlPacket(PacketDelimiter))
+		}
+		_, _ = w.Write(EncodePktLine([]byte("packfile\n")))
+		for len(pack) > 0 {
+			n := len(pack)
+			if n > 65515 {
+				n = 65515
+			}
+			payload := append([]byte{1}, pack[:n]...)
+			_, _ = w.Write(EncodePktLine(payload))
+			pack = pack[n:]
+		}
 		_, _ = w.Write(EncodeControlPacket(PacketFlush))
+		return
 	}
-	if len(haves) > 0 {
-		_, _ = w.Write(EncodePktLine([]byte("ACK " + haves[len(haves)-1] + "\n")))
-	} else {
-		_, _ = w.Write(EncodePktLine([]byte("NAK\n")))
+	if !done {
+		return
 	}
 	if sideband {
 		for len(pack) > 0 {
@@ -196,6 +286,16 @@ func (f *forge) handleUploadPackFor(w http.ResponseWriter, r *http.Request, name
 	} else {
 		_, _ = w.Write(pack)
 	}
+}
+
+func (f *forge) advertiseRefsV2For(w http.ResponseWriter, namespace string) {
+	w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	for _, capability := range []string{"version 2\n", "agent=git-core-clone/1\n", "ls-refs=unborn\n", "fetch=shallow filter\n", "object-format=sha1\n"} {
+		_, _ = w.Write(EncodePktLine([]byte(capability)))
+	}
+	_, _ = w.Write(EncodeControlPacket(PacketFlush))
 }
 
 func (f *forge) handleReceivePack(w http.ResponseWriter, r *http.Request) {

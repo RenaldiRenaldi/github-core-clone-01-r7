@@ -1,28 +1,104 @@
 # Git forge R7
 
-## Fix 3 continuation verification (in progress)
+## R7 Fix 5: protocol v2 shallow upload-pack
 
-Go 1.24.0 is available at `~/bin/go/bin/go`. The continuation changes pass
-`go vet ./...`, `go test ./...`, and `go test -race ./...`. A server binary
-built with that toolchain starts with an empty server PATH, and `/healthz` plus
-both smart HTTP advertisements respond. The stock Git client completes an
-initial full clone and push; the pushed ref is visible through `git ls-remote`.
+The shallow-clone failure was a protocol-version mismatch. R4 advertises
+upload-pack protocol v2 when the request carries `Git-Protocol: version=2` and
+answers a fetch in v2 framing. R7 ignored that header and advertised v0, so
+stock Git's shallow negotiation received v0 `shallow`/flush/`NAK` packets where
+it expected v2 `shallow-info`/delimiter/`packfile` sections. R7 now advertises
+the v2 capabilities and handles `ls-refs` and `fetch` using the same framing
+and boundary selection as R4.
 
-The stock Git shallow-clone integration is not passing yet. `git clone
---depth 1` reaches the shallow negotiation but fails with a pkt-line state
-error (`git fetch-pack: expected shallow list` or `expected ACK/NAK`). A fresh
-full clone after a push also needs another verification pass. The depth-1 and
-depth-2 boundary tests only verify object selection, not the complete HTTP
-negotiation. Fix 3 is therefore incomplete and has not reached its grade
-target.
+The R4 v2 exchange is: advertisement capabilities then flush; `ls-refs`
+request ending in flush and ref pkt-lines then flush; fetch request with a
+delimiter and `deepen N`, wants, and `done`; response `shallow-info`, one
+`shallow <commit>` per in-depth commit whose parents are omitted, delimiter,
+`packfile`, channel-1 sideband pack bytes, flush. R7's stock-Git trace now has
+that same shape. The failed R7 v0 trace had no `version 2` capability and its
+depth request response began with `shallow <tip>`, flush, `NAK`; Git then
+reported `expected shallow list` / `expected packfile` as it parsed the
+out-of-phase response.
 
-The continuation's committed process-driver grade at `8274c5b` was **441/1000**
-(agent 133, feature 175, performance 133; working 1). Live and replay both
-finished, and L1 regrade reproduced byte-for-byte. The entry made no model
-calls, so this run does not satisfy transcript coverage or priced-thinking
-gates. This grade is below the requested target. Two exports from the running
-empty-PATH server both hashed to
-`7a8c71bc66c5b0f110a134da6df873340b7d93d95947986e0864b9c1a1a11a62`.
+The regression test drives the handler with depth-1 and depth-2 v2 requests,
+asserts the shallow-info marker, boundary ID, delimiter, packfile marker and
+pack contents. It uses the pkt-line codec and object store without invoking
+Git. The fixture has three commits: depth 1 marks the tip shallow and includes
+one commit; depth 2 marks its parent shallow and includes two commits.
+
+Verified with Go 1.24.0 (`export PATH="$HOME/bin/go/bin:$PATH"` before each Go
+command): `go test ./...` and `go test -race ./...` pass. Real Git 2.43.0 depth-1
+and depth-2 clones, a full clone, a commit and push, `git ls-remote`, and a
+fresh full clone after push all succeed. A server built with Go and launched
+with `PATH=/tmp/r7-no-git-path` returned `/healthz` `{"ok":true}`, both service
+advertisements, and served a depth-1 clone with `.git/shallow` containing
+`9d7b4e6a9682052342bb93ab80414777c751899c`. The server has no runtime Git
+dependency; `exec.Command("git", ...)` appears only in Git-aware tests.
+
+Protocol v2 pkt-line sequence from the working exchange:
+
+```text
+S> version 2; agent=git-core-clone/1; ls-refs=unborn; fetch=shallow filter; object-format=sha1; 0000
+C> command=ls-refs; ...; 0000
+S> <tip> HEAD symref-target:refs/heads/main; <tip> refs/heads/main; 0000
+C> command=fetch; 0001; deepen 1; want <tip>; done; 0000
+S> shallow-info; shallow <tip>; 0001; packfile; 0001<PACK bytes>; 0000
+```
+
+For the seeded tip `9d7b4e6a9682052342bb93ab80414777c751899c`, the real depth-1
+clone's `.git/shallow` contains that exact ID. R4's handler uses the same
+boundary rule: the depth-limited commit inside the pack is marked shallow when
+it has parents beyond the requested depth.
+
+Real Git commands and output against the R7 server:
+
+```text
+$ git clone --depth 1 http://127.0.0.1:36047/octocat/hello-world.git /tmp/r7-depth1-v2c
+Cloning into '/tmp/r7-depth1-v2c'...
+$ cat /tmp/r7-depth1-v2c/.git/shallow
+9d7b4e6a9682052342bb93ab80414777c751899c
+$ git clone --depth 2 http://127.0.0.1:36047/octocat/hello-world.git /tmp/r7-depth2
+Cloning into '/tmp/r7-depth2'...
+$ git -C /tmp/r7-depth2 rev-list --count HEAD
+2
+$ git clone http://127.0.0.1:36047/octocat/hello-world.git /tmp/r7-full
+Cloning into '/tmp/r7-full'...
+9d7b4e6 Add greeting
+497de37 Initial demo
+$ git -C /tmp/r7-full -c user.name=Fix5 -c user.email=fix5@example.test commit --allow-empty -m 'fix5 push verification'
+[main b835598] fix5 push verification
+$ git -C /tmp/r7-full push origin main
+   9d7b4e6..b835598  main -> main
+$ git ls-remote http://127.0.0.1:36047/octocat/hello-world.git refs/heads/main
+b835598123c40149cadffed8a9a9c816ca0b2c64 refs/heads/main
+$ git clone -q http://127.0.0.1:36047/octocat/hello-world.git /tmp/r7-fresh-after-push
+$ git -C /tmp/r7-fresh-after-push log -1 --format='%H %s'
+b835598123c40149cadffed8a9a9c816ca0b2c64 fix5 push verification
+```
+
+Empty-PATH startup evidence (server built with Go 1.24.0 first):
+
+```text
+$ env PATH=/tmp/r7-no-git-path /tmp/r7-fix5-server
+[::]:43991
+$ curl -fsS http://127.0.0.1:43991/healthz
+{"ok":true}
+$ curl -fsS -H 'Git-Protocol: version=2' 'http://127.0.0.1:43991/octocat/hello-world.git/info/refs?service=git-upload-pack'
+000eversion 2
+001bagent=git-core-clone/1
+0013ls-refs=unborn
+0019fetch=shallow filter
+0017object-format=sha1
+0000
+$ curl -fsS 'http://127.0.0.1:43991/octocat/hello-world.git/info/refs?service=git-receive-pack'
+0000001f# service=git-receive-pack
+... refs/heads/main
+0000
+$ git clone --depth 1 http://127.0.0.1:43991/octocat/hello-world.git /tmp/r7-depth1-empty-path
+Cloning into '/tmp/r7-depth1-empty-path'...
+$ cat /tmp/r7-depth1-empty-path/.git/shallow
+9d7b4e6a9682052342bb93ab80414777c751899c
+```
 
 ## Smart HTTP protocol notes
 
@@ -145,23 +221,25 @@ R3/R5 rows are only populated where their README has measurements.
 | Cached fetches/sec | — | 12,645 | — | 205 |
 | 200 issue writes | 83.002 ms | 97.893 ms | — | 33.03 ms |
 
-Benchmarks use one persistent HTTP connection and sequential requests, against
-the pure-Go server built for this revision. The Git upload path still traverses
-and compresses the object graph for each fetch; it does not yet cache pack
-bytes. The R3/R4 comparison figures came from their README records and are
-historical, not same-host measurements.
+Fix 5 cached-upload measurement: 200 protocol-v2 upload-pack POSTs over one
+persistent loopback HTTP connection took 95.83 ms (2,087.1 requests/sec), with
+HTTP 200 for every request and a 558-byte response. The first request populated
+the existing pack cache; the remaining requests reused it. The older table
+above records the prior process-driver workload and remains useful for the
+historical R3/R4 comparison, whose figures came from their README records and
+are not same-host measurements.
 
 The kit's grade-local run and final transcript checks are recorded below.
 
 ## Grade-local and final transcript checks
 
-The committed static executable scored **428/1000**, with 35/120 checks passed,
-on the kit's process driver at commit `5ecbe1a`. The run reproduced byte for
-byte across live and replay. Its four loopback workloads measured pushes,
-reads, and writes; shallow clone fetches failed because the server does not yet
-implement shallow negotiation. The kit's Docker driver could not start on this
-VM: `spawnSync docker ENOENT`. The process run used Node 24.22.1 while the kit
-specifies Node 26.13.1. This is below the 950-point target.
+Historical grade: the static executable scored **428/1000**, with 35/120 checks
+passed, on the kit's process driver at commit `5ecbe1a`. The run reproduced
+byte for byte across live and replay. Shallow clone fetches failed at that
+revision. The kit's Docker driver could not start on this VM (`spawnSync docker
+ENOENT`); the process run used Node 24.22.1 while the kit specifies Node
+26.13.1. Fix 5's committed grade and transcript results are recorded below
+after the final run.
 
 The nine-session bundle (test, build-1, core, smart HTTP, API, merges/final,
 Fix 1, and Fix 2 sessions) is
