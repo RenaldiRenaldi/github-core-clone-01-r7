@@ -111,7 +111,7 @@ func TestSmartHTTPPushCASAcceptsCurrentAndRejectsStale(t *testing.T) {
 	if b, e := stale.CombinedOutput(); e == nil {
 		t.Fatalf("stale push unexpectedly succeeded: %s", b)
 	}
-	got, ok := f.objects.ReadRef("refs/heads/main")
+	got, ok := f.objects.ReadRefIn("octocat/hello-world", "refs/heads/main")
 	_, commitData, err := f.objects.ReadObject(got)
 	if !ok || err != nil || !bytes.Contains(commitData, []byte("accepted CAS push")) {
 		t.Fatalf("stale push changed ref: %q %s %v", got, commitData, err)

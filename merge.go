@@ -18,7 +18,7 @@ func (f *forge) specialRepoAPI(w http.ResponseWriter, r *http.Request, q *repo, 
 			writeJSON(w, 405, map[string]string{"message": "Method not allowed"})
 			return true
 		}
-		sha, ok := f.objects.ReadRef("refs/heads/" + p[8])
+		sha, ok := f.objects.ReadRefIn(q.Owner+"/"+q.Name, "refs/heads/"+p[8])
 		if !ok {
 			writeJSON(w, 404, map[string]string{"message": "branch not found"})
 			return true

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -130,6 +131,14 @@ func (f *forge) userRepos(w http.ResponseWriter, r *http.Request) {
 		q := &repo{Owner: owner, Name: name, Description: stringVal(in["description"]), ID: f.next}
 		f.repos[owner+"/"+name] = q
 		f.mu.Unlock()
+		bare := filepath.Join(f.gitRoot, owner, name+".git")
+		if err := os.MkdirAll(filepath.Join(bare, "refs", "heads"), 0755); err != nil {
+			writeJSON(w, 500, map[string]string{"message": "repository initialization failed"})
+			return
+		}
+		_ = os.MkdirAll(filepath.Join(bare, "objects", "info"), 0755)
+		_ = os.WriteFile(filepath.Join(bare, "HEAD"), []byte("ref: refs/heads/main\n"), 0644)
+		_ = os.WriteFile(filepath.Join(bare, "config"), []byte("[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n[http]\n\treceivepack = true\n"), 0644)
 		writeJSON(w, 201, q.json())
 		return
 	}
@@ -160,6 +169,17 @@ func (f *forge) repoAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(p) == 5 {
 		if r.Method == "GET" {
+			writeJSON(w, 200, q.json())
+		} else if r.Method == "DELETE" {
+			delete(f.repos, key)
+			f.objects.DeleteNamespace(key)
+			_ = os.RemoveAll(filepath.Join(f.gitRoot, q.Owner, q.Name+".git"))
+			w.WriteHeader(http.StatusNoContent)
+		} else if r.Method == "PATCH" {
+			in := decode(r)
+			if v, ok := in["description"].(string); ok {
+				q.Description = v
+			}
 			writeJSON(w, 200, q.json())
 		} else {
 			writeJSON(w, 405, map[string]string{"message": "Method not allowed"})

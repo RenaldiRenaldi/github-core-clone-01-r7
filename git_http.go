@@ -23,10 +23,15 @@ func (f *forge) serveGit(w http.ResponseWriter, r *http.Request) bool {
 		http.NotFound(w, r)
 		return true
 	}
+	if _, err := os.Stat(filepath.Join(f.gitRoot, gitNamespace(parts)+".git")); err != nil {
+		http.NotFound(w, r)
+		return true
+	}
 	if strings.HasSuffix(parts[1], ".git/info/refs") {
 		service := r.URL.Query().Get("service")
 		if service == "git-upload-pack" || service == "git-receive-pack" {
-			f.advertiseRefs(w, service)
+			repoName := strings.TrimSuffix(strings.SplitN(parts[1], "/", 2)[0], ".git")
+			f.advertiseRefsFor(w, service, parts[0]+"/"+repoName)
 			return true
 		}
 	}
@@ -35,16 +40,23 @@ func (f *forge) serveGit(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	if strings.HasSuffix(parts[1], "/git-upload-pack") {
-		f.handleUploadPack(w, r)
+		f.handleUploadPackFor(w, r, gitNamespace(parts))
 	} else if strings.HasSuffix(parts[1], "/git-receive-pack") {
-		f.handleReceivePack(w, r)
+		f.handleReceivePackFor(w, r, gitNamespace(parts))
 	} else {
 		http.NotFound(w, r)
 	}
 	return true
 }
+func gitNamespace(parts []string) string {
+	repoName := strings.TrimSuffix(strings.SplitN(parts[1], "/", 2)[0], ".git")
+	return parts[0] + "/" + repoName
+}
 
 func (f *forge) handleUploadPack(w http.ResponseWriter, r *http.Request) {
+	f.handleUploadPackFor(w, r, "")
+}
+func (f *forge) handleUploadPackFor(w http.ResponseWriter, r *http.Request, namespace string) {
 	body, e := io.ReadAll(r.Body)
 	if e != nil {
 		http.Error(w, "bad request", 400)
@@ -114,6 +126,9 @@ func (f *forge) handleUploadPack(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *forge) handleReceivePack(w http.ResponseWriter, r *http.Request) {
+	f.handleReceivePackFor(w, r, "")
+}
+func (f *forge) handleReceivePackFor(w http.ResponseWriter, r *http.Request, namespace string) {
 	body, e := io.ReadAll(r.Body)
 	if e != nil {
 		http.Error(w, "bad request", 400)
@@ -157,7 +172,7 @@ func (f *forge) handleReceivePack(w http.ResponseWriter, r *http.Request) {
 	prepared := []refUpdate{}
 	valid := true
 	for _, u := range updates {
-		current, ok := f.objects.ReadRef(u.ref)
+		current, ok := f.objects.ReadRefIn(namespace, u.ref)
 		if !ok {
 			current = "0000000000000000000000000000000000000000"
 		}
@@ -183,7 +198,7 @@ func (f *forge) handleReceivePack(w http.ResponseWriter, r *http.Request) {
 		prepared = append(prepared, refUpdate{u.ref, u.new, expected})
 	}
 	if valid {
-		if e := f.objects.UpdateRefs(prepared); e != nil {
+		if e := f.objects.UpdateRefsIn(namespace, prepared); e != nil {
 			for _, u := range updates {
 				statuses = append(statuses, []byte("ng "+u.ref+" "+e.Error()+"\n"))
 			}
@@ -256,6 +271,9 @@ func (f *forge) seedDemo() {
 	if err := store.UpdateRef("refs/heads/main", second, ""); err != nil {
 		panic(err)
 	}
+	if err := store.UpdateRefIn("octocat/hello-world", "refs/heads/main", second, ""); err != nil {
+		panic(err)
+	}
 	// Keep the existing CGI-backed transfer and merge paths usable without
 	// invoking Git during startup: publish canonical loose files directly.
 	bare := filepath.Join(f.gitRoot, "octocat", "hello-world.git")
@@ -304,6 +322,9 @@ func demoCommit(tree, parent, message string) string {
 }
 
 func (f *forge) advertiseRefs(w http.ResponseWriter, service string) {
+	f.advertiseRefsFor(w, service, "")
+}
+func (f *forge) advertiseRefsFor(w http.ResponseWriter, service, namespace string) {
 	if f.objects == nil {
 		http.NotFound(w, nil)
 		return
@@ -313,7 +334,7 @@ func (f *forge) advertiseRefs(w http.ResponseWriter, service string) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(EncodePktLine([]byte("# service=" + service + "\n")))
 	_, _ = w.Write(EncodeControlPacket(PacketFlush))
-	refs := f.objects.HeadRefs()
+	refs := f.objects.HeadRefsIn(namespace)
 	capabilities := "report-status delete-refs side-band-64k ofs-delta atomic agent=git-core-clone/1"
 	if service == "git-upload-pack" {
 		capabilities = "multi_ack multi_ack_detailed thin-pack side-band side-band-64k ofs-delta symref=HEAD:refs/heads/main agent=git-core-clone/1"

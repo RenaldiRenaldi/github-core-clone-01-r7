@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -105,6 +106,54 @@ func (s *objectStore) ReadRef(name string) (string, bool) {
 	defer s.mu.RUnlock()
 	id, ok := s.refs[name]
 	return id, ok
+}
+func refStoreKey(namespace, name string) string {
+	if namespace == "" {
+		return name
+	}
+	return namespace + "\x00" + name
+}
+func (s *objectStore) ReadRefIn(namespace, name string) (string, bool) {
+	return s.ReadRef(refStoreKey(namespace, name))
+}
+func (s *objectStore) UpdateRefIn(namespace, name, id, expected string) error {
+	return s.UpdateRef(refStoreKey(namespace, name), id, expected)
+}
+func (s *objectStore) UpdateRefsIn(namespace string, updates []refUpdate) error {
+	for i := range updates {
+		updates[i].name = refStoreKey(namespace, updates[i].name)
+	}
+	return s.UpdateRefs(updates)
+}
+func (s *objectStore) DeleteNamespace(namespace string) {
+	prefix := namespace + "\x00"
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.refs {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.refs, key)
+		}
+	}
+}
+func (s *objectStore) HeadRefsIn(namespace string) []struct{ name, id string } {
+	prefix := ""
+	if namespace != "" {
+		prefix = namespace + "\x00"
+	}
+	refs := []struct{ name, id string }{}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for key, id := range s.refs {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		name := strings.TrimPrefix(key, prefix)
+		if strings.HasPrefix(name, "refs/heads/") {
+			refs = append(refs, struct{ name, id string }{name, id})
+		}
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].name < refs[j].name })
+	return refs
 }
 func (s *objectStore) HeadRefs() []struct{ name, id string } {
 	s.mu.RLock()
