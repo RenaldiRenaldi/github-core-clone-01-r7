@@ -349,6 +349,8 @@ func (f *forge) advertiseRefsFor(w http.ResponseWriter, service, namespace strin
 		for _, ref := range refs {
 			_, _ = w.Write(EncodePktLine([]byte(ref.id + " " + ref.name + "\n")))
 		}
+	} else {
+		_, _ = w.Write(EncodePktLine([]byte("0000000000000000000000000000000000000000 capabilities^{}\x00" + capabilities + "\n")))
 	}
 	_, _ = w.Write(EncodeControlPacket(PacketFlush))
 }
