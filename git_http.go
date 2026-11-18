@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -48,6 +51,12 @@ func (f *forge) serveGit(w http.ResponseWriter, r *http.Request) bool {
 	}
 	return true
 }
+
+func uploadPackCacheKey(wants,haves []string, depth int, since int64, not map[string]bool) string {
+	w:=append([]string(nil),wants...); h:=append([]string(nil),haves...); sort.Strings(w); sort.Strings(h)
+	n:=make([]string,0,len(not)); for k:=range not { n=append(n,k) }; sort.Strings(n)
+	return strings.Join(w,",")+"|"+strings.Join(h,",")+"|"+strconv.Itoa(depth)+"|"+strconv.FormatInt(since,10)+"|"+strings.Join(n,",")
+}
 func gitNamespace(parts []string) string {
 	repoName := strings.TrimSuffix(strings.SplitN(parts[1], "/", 2)[0], ".git")
 	return parts[0] + "/" + repoName
@@ -64,6 +73,11 @@ func (f *forge) handleUploadPackFor(w http.ResponseWriter, r *http.Request, name
 	}
 	rd := bytes.NewReader(body)
 	wants, haves := []string{}, []string{}
+	clientShallow := []string{}
+	depth := 0
+	deepenSince := int64(0)
+	deepenNot := map[string]bool{}
+	filterSpec := ""
 	sideband := false
 	for {
 		line, e := DecodePktLine(rd)
@@ -84,26 +98,41 @@ func (f *forge) handleUploadPackFor(w http.ResponseWriter, r *http.Request, name
 		if len(fields) >= 2 && fields[0] == "have" {
 			haves = append(haves, fields[1])
 		}
+		if len(fields) >= 2 && fields[0] == "shallow" { clientShallow = append(clientShallow, fields[1]) }
+		if len(fields) >= 2 && fields[0] == "deepen" { fmt.Sscanf(fields[1], "%d", &depth) }
+		if len(fields) >= 2 && fields[0] == "deepen-since" { fmt.Sscanf(fields[1], "%d", &deepenSince) }
+		if len(fields) >= 2 && fields[0] == "deepen-not" { deepenNot[fields[1]] = true }
+		if len(fields) >= 2 && fields[0] == "filter" { filterSpec = fields[1] }
 	}
-	ids := f.objects.reachable(wants)
+	cacheKey := uploadPackCacheKey(wants, haves, depth, deepenSince, deepenNot)+"|"+filterSpec
+	f.packCacheMu.RLock(); cached := append([]byte(nil), f.packCache[cacheKey]...); f.packCacheMu.RUnlock()
+	ids, boundaries := f.objects.reachableDepth(wants, depth)
+	if deepenSince > 0 || len(deepenNot)>0 {
+		ids, boundaries = f.objects.filterDeepen(ids, boundaries, deepenSince, deepenNot)
+	}
 	excluded := map[string]bool{}
 	for _, id := range f.objects.reachable(haves) {
 		excluded[id] = true
 	}
 	filtered := ids[:0]
 	for _, id := range ids {
-		if !excluded[id] {
+		kind,_,_:=f.objects.ReadObject(id)
+		if !excluded[id] && !(filterSpec=="blob:none" && kind=="blob") {
 			filtered = append(filtered, id)
 		}
 	}
-	pack, e := f.objects.makePack(filtered)
-	if e != nil {
-		http.Error(w, e.Error(), 400)
-		return
+	pack := cached
+	if pack == nil {
+		pack, e = f.objects.makePack(filtered)
+		if e != nil { http.Error(w, e.Error(), 400); return }
+		f.packCacheMu.Lock(); if f.packCache == nil { f.packCache=map[string][]byte{} }; f.packCache[cacheKey]=append([]byte(nil),pack...); f.packCacheMu.Unlock()
 	}
 	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(200)
+	boundarySet:=map[string]bool{}; for _, id:=range boundaries { boundarySet[id]=true }
+	for _, id:=range clientShallow { if !boundarySet[id] { _,_=w.Write(EncodePktLine([]byte("unshallow "+id+"\n"))) } }
+	for _, id:=range boundaries { _,_=w.Write(EncodePktLine([]byte("shallow "+id+"\n"))) }
 	if len(haves) > 0 {
 		_, _ = w.Write(EncodePktLine([]byte("ACK " + haves[len(haves)-1] + "\n")))
 	} else {
@@ -342,7 +371,7 @@ func (f *forge) advertiseRefsFor(w http.ResponseWriter, service, namespace strin
 	refs := f.objects.HeadRefsIn(namespace)
 	capabilities := "report-status delete-refs side-band-64k ofs-delta atomic agent=git-core-clone/1"
 	if service == "git-upload-pack" {
-		capabilities = "multi_ack multi_ack_detailed thin-pack side-band side-band-64k ofs-delta symref=HEAD:refs/heads/main agent=git-core-clone/1"
+		capabilities = "multi_ack multi_ack_detailed thin-pack side-band side-band-64k ofs-delta filter symref=HEAD:refs/heads/main agent=git-core-clone/1"
 	}
 	if len(refs) > 0 {
 		_, _ = w.Write(EncodePktLine([]byte(refs[0].id + " HEAD\x00" + capabilities + "\n")))

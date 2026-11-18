@@ -188,6 +188,24 @@ func TestPackRoundTripAndUploadHandler(t *testing.T) {
 	}
 }
 
+func TestDepthLimitedPackAndBoundary(t *testing.T) {
+	f:=testForge(t); tip,_:=f.objects.ReadRef("refs/heads/main")
+	ids,boundaries:=f.objects.reachableDepth([]string{tip},1)
+	if len(boundaries)!=1 || boundaries[0]!=tip { t.Fatalf("depth-1 boundaries = %v",boundaries) }
+	commits:=0; for _,id:=range ids { kind,_,err:=f.objects.ReadObject(id); if err==nil && kind=="commit" { commits++ } }
+	if commits!=1 { t.Fatalf("depth-1 pack has %d commits, want 1",commits) }
+	pack,err:=f.objects.makePack(ids); if err!=nil { t.Fatal(err) }; copy:=newObjectStore(); if err=copy.parsePack(pack); err!=nil { t.Fatal(err) }
+	if _,_,err=copy.ReadObject(tip); err!=nil { t.Fatalf("tip absent from shallow pack: %v",err) }
+	second,_:=f.objects.reachableDepth([]string{tip},2); commits=0; for _,id:=range second { kind,_,e:=f.objects.ReadObject(id); if e==nil && kind=="commit" { commits++ } }; if commits!=2 { t.Fatalf("depth-2 pack has %d commits, want 2",commits) }
+}
+
+func TestUploadPackCachesIdenticalPack(t *testing.T) {
+	f:=testForge(t); tip,_:=f.objects.ReadRef("refs/heads/main")
+	var request bytes.Buffer; request.Write(EncodePktLine([]byte("want "+tip+" side-band-64k\n"))); request.Write(EncodeControlPacket(PacketFlush)); request.Write(EncodePktLine([]byte("done\n")))
+	run:=func() []byte { w:=httptest.NewRecorder(); f.handleUploadPack(w,httptest.NewRequest("POST","/git-upload-pack",bytes.NewReader(request.Bytes()))); if w.Code!=200 { t.Fatalf("upload status %d",w.Code) }; return append([]byte(nil),w.Body.Bytes()...) }
+	a:=run(); b:=run(); if !bytes.Equal(a,b) { t.Fatal("identical upload-pack requests returned different bytes") }; if len(f.packCache)!=1 { t.Fatalf("cache entries = %d",len(f.packCache)) }
+}
+
 func TestReceivePackStoresObjectsAndRejectsStaleCAS(t *testing.T) {
 	f := testForge(t)
 	old, _ := f.objects.ReadRef("refs/heads/main")

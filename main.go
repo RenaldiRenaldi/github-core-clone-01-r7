@@ -50,6 +50,8 @@ type forge struct {
 	next, issue, pr int
 	gitRoot         string
 	objects         *objectStore
+	packCacheMu     sync.RWMutex
+	packCache       map[string][]byte
 	reviews         map[string][]review
 	protections     map[string]protection
 }
