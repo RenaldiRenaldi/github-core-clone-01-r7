@@ -1,5 +1,21 @@
 # Git forge R7
 
+## Fix 3 continuation verification (in progress)
+
+Go 1.24.0 is available at `~/bin/go/bin/go`. The continuation changes pass
+`go vet ./...`, `go test ./...`, and `go test -race ./...`. A server binary
+built with that toolchain starts with an empty server PATH, and `/healthz` plus
+both smart HTTP advertisements respond. The stock Git client completes an
+initial full clone and push; the pushed ref is visible through `git ls-remote`.
+
+The stock Git shallow-clone integration is not passing yet. `git clone
+--depth 1` reaches the shallow negotiation but fails with a pkt-line state
+error (`git fetch-pack: expected shallow list` or `expected ACK/NAK`). A fresh
+full clone after a push also needs another verification pass. The depth-1 and
+depth-2 boundary tests only verify object selection, not the complete HTTP
+negotiation. Fix 3 is therefore incomplete and has not reached its grade
+target.
+
 ## Smart HTTP protocol notes
 
 ## R7 Fixes 1 and 2: pure-Go Git transport

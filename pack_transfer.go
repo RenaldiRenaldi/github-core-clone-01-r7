@@ -9,8 +9,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"strings"
 	"strconv"
+	"strings"
 )
 
 var packTypeCode = map[string]byte{"commit": 1, "tree": 2, "blob": 3, "tag": 4}
@@ -59,13 +59,55 @@ func (s *objectStore) reachable(roots []string) []string {
 }
 
 func (s *objectStore) filterDeepen(ids, boundaries []string, since int64, not map[string]bool) ([]string, []string) {
-	blocked:=map[string]bool{}
-	if len(not)>0 {
-		s.mu.RLock(); refs:=make(map[string]string,len(s.refs)); for k,v:=range s.refs { refs[k]=v }; s.mu.RUnlock()
-		for ref,id:=range refs { name:=ref; if i:=strings.LastIndexByte(name,'\x00'); i>=0 { name=name[i+1:] }; if not[name] || not[strings.TrimPrefix(name,"refs/heads/")] { for _,x:=range s.reachable([]string{id}) { blocked[x]=true } } }
+	blocked := map[string]bool{}
+	if len(not) > 0 {
+		s.mu.RLock()
+		refs := make(map[string]string, len(s.refs))
+		for k, v := range s.refs {
+			refs[k] = v
+		}
+		s.mu.RUnlock()
+		for ref, id := range refs {
+			name := ref
+			if i := strings.LastIndexByte(name, '\x00'); i >= 0 {
+				name = name[i+1:]
+			}
+			if not[name] || not[strings.TrimPrefix(name, "refs/heads/")] {
+				for _, x := range s.reachable([]string{id}) {
+					blocked[x] = true
+				}
+			}
+		}
 	}
-	out:=make([]string,0,len(ids)); for _,id:=range ids { if blocked[id] { continue }; kind,data,e:=s.ReadObject(id); if e==nil && kind=="commit" && since>0 { head:=strings.SplitN(string(data),"\n\n",2)[0]; timestamp:=int64(0); for _,line:=range strings.Split(head,"\n") { fields:=strings.Fields(line); if len(fields)>=3 && (fields[0]=="author" || fields[0]=="committer") { timestamp,_=strconv.ParseInt(fields[len(fields)-2],10,64); break } }; if timestamp<since { continue } }; out=append(out,id) }
-	b:=boundaries[:0]; for _,id:=range boundaries { if !blocked[id] { b=append(b,id) } }; return out,b
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if blocked[id] {
+			continue
+		}
+		kind, data, e := s.ReadObject(id)
+		if e == nil && kind == "commit" && since > 0 {
+			head := strings.SplitN(string(data), "\n\n", 2)[0]
+			timestamp := int64(0)
+			for _, line := range strings.Split(head, "\n") {
+				fields := strings.Fields(line)
+				if len(fields) >= 3 && (fields[0] == "author" || fields[0] == "committer") {
+					timestamp, _ = strconv.ParseInt(fields[len(fields)-2], 10, 64)
+					break
+				}
+			}
+			if timestamp < since {
+				continue
+			}
+		}
+		out = append(out, id)
+	}
+	b := boundaries[:0]
+	for _, id := range boundaries {
+		if !blocked[id] {
+			b = append(b, id)
+		}
+	}
+	return out, b
 }
 
 // reachableDepth returns commits up to depth generations from each wanted tip,
@@ -75,31 +117,82 @@ func (s *objectStore) reachableDepth(roots []string, depth int) ([]string, []str
 	seenObjects, commits, shallow := map[string]bool{}, []string{}, []string{}
 	var addTree func(string)
 	addTree = func(id string) {
-		if seenObjects[id] { return }
+		if seenObjects[id] {
+			return
+		}
 		seenObjects[id] = true
-		kind, data, err := s.ReadObject(id); if err != nil { return }
+		kind, data, err := s.ReadObject(id)
+		if err != nil {
+			return
+		}
 		if kind == "tree" {
-			for i := 0; i < len(data); { z := bytes.IndexByte(data[i:], 0); if z < 0 || i+z+21 > len(data) { break }; off := i+z+1; addTree(hex.EncodeToString(data[off:off+20])); i=off+20 }
+			for i := 0; i < len(data); {
+				z := bytes.IndexByte(data[i:], 0)
+				if z < 0 || i+z+21 > len(data) {
+					break
+				}
+				off := i + z + 1
+				addTree(hex.EncodeToString(data[off : off+20]))
+				i = off + 20
+			}
 		}
 	}
-	type node struct{id string; level int}
+	type node struct {
+		id    string
+		level int
+	}
 	queue := []node{}
-	for _, id := range roots { queue=append(queue,node{id,1}) }
+	for _, id := range roots {
+		queue = append(queue, node{id, 1})
+	}
 	seenCommit := map[string]bool{}
-	for len(queue)>0 {
-		n := queue[0]; queue=queue[1:]; if seenCommit[n.id] { continue }; seenCommit[n.id]=true
-		kind,data,err:=s.ReadObject(n.id); if err!=nil || kind!="commit" { continue }
-		commits=append(commits,n.id)
-		lines:=strings.SplitN(string(data),"\n\n",2)[0]; parents:=[]string{}; tree:=""
-		for _, line:=range strings.Split(lines,"\n") { fields:=strings.Fields(line); if len(fields)==2 && fields[0]=="tree" { tree=fields[1] }; if len(fields)==2 && fields[0]=="parent" { parents=append(parents,fields[1]) } }
-		if tree!="" { addTree(tree) }
-		if depth>0 && n.level>=depth { if len(parents)>0 { shallow=append(shallow,n.id) }; continue }
-		for _, p:=range parents { queue=append(queue,node{p,n.level+1}) }
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		if seenCommit[n.id] {
+			continue
+		}
+		seenCommit[n.id] = true
+		kind, data, err := s.ReadObject(n.id)
+		if err != nil || kind != "commit" {
+			continue
+		}
+		commits = append(commits, n.id)
+		lines := strings.SplitN(string(data), "\n\n", 2)[0]
+		parents := []string{}
+		tree := ""
+		for _, line := range strings.Split(lines, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) == 2 && fields[0] == "tree" {
+				tree = fields[1]
+			}
+			if len(fields) == 2 && fields[0] == "parent" {
+				parents = append(parents, fields[1])
+			}
+		}
+		if tree != "" {
+			addTree(tree)
+		}
+		if depth > 0 && n.level >= depth {
+			if len(parents) > 0 {
+				shallow = append(shallow, n.id)
+			}
+			continue
+		}
+		for _, p := range parents {
+			queue = append(queue, node{p, n.level + 1})
+		}
 	}
 	return append(commits, keys(seenObjects)...), shallow
 }
 
-func keys(m map[string]bool) []string { out:=make([]string,0,len(m)); for k:=range m { out=append(out,k) }; return out }
+func keys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
 
 func (s *objectStore) makePack(ids []string) ([]byte, error) {
 	var out bytes.Buffer
