@@ -51,3 +51,30 @@ a3c2a55 Test push
 Checks: `go test ./...` and `go test -race ./...` both pass. The focused
 handler tests verify the upload-pack advertisement and clone a checkout through
 an in-process HTTP server.
+
+## REST, GraphQL, MCP, and web UI
+
+The server shares one mutex-protected in-memory repository, issue, and pull
+request store across REST v3, GraphQL, MCP, and `/`. Startup seeds
+`octocat/hello-world` with one issue and one pull request, plus
+`octocat/notes`. REST supports repository create/list/get, issue
+create/list/get/update/comments, pull request create/list/get, and the demo
+authenticated user. GraphQL supports `viewer` and repository issue/PR
+connections. MCP advertises the eight R4 tool names; the merge, review, and
+file-content operations report that they are not implemented in this step.
+
+Live HTTP check (server started with `go run .` on port 46353):
+
+```text
+$ curl -sS -X POST http://127.0.0.1:46353/api/v3/repos/octocat/hello-world/issues -H 'Content-Type: application/json' -d '{"title":"Curl API issue","body":"Created by the live check"}'
+{"number":2,"title":"Curl API issue","body":"Created by the live check","state":"open"}
+$ curl -sS http://127.0.0.1:46353/api/v3/repos/octocat/hello-world/issues/2
+{"number":2,"title":"Curl API issue","body":"Created by the live check","state":"open"}
+$ curl -sS -X POST http://127.0.0.1:46353/graphql -H 'Content-Type: application/json' -d '{"query":"{ repository(owner: \"octocat\", name: \"hello-world\") { name owner { login } issues { nodes { number title state } } pullRequests { nodes { number title state } } } }"}'
+{"data":{"repository":{"issues":{"nodes":[{"number":1,"state":"OPEN","title":"Welcome"},{"number":2,"state":"OPEN","title":"Curl API issue"}]},"name":"hello-world","owner":{"login":"octocat"},"pullRequests":{"nodes":[{"number":1,"state":"OPEN","title":"Add greeting"}]}}}
+$ curl -sS -X POST http://127.0.0.1:46353/mcp -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_issue","arguments":{"owner":"octocat","repo":"hello-world","title":"MCP curl issue","body":"created by MCP"}}}'
+{"id":1,"jsonrpc":"2.0","result":{"content":[{"text":"{\"body\":\"created by MCP\",\"number\":3,\"state\":\"open\",\"title\":\"MCP curl issue\"}","type":"text"}],"isError":false}}
+```
+
+API tests: `go test ./...` and `go test -race ./...` pass, including issue
+create/get, PR create/list, GraphQL repository selection, and an MCP tool call.

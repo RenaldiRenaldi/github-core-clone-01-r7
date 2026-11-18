@@ -18,6 +18,7 @@ const (
 // EncodePktLine writes a Git data packet. Empty payloads encode as flushes;
 // callers that need delimiter or response-end markers use EncodeControlPacket.
 func EncodePktLine(payload []byte) []byte {
+	// The length includes this four-byte header, as required by Git's wire format.
 	if len(payload) == 0 {
 		return []byte("0000")
 	}

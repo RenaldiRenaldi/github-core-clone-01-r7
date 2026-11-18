@@ -78,6 +78,7 @@ func (f *forge) serveGit(w http.ResponseWriter, r *http.Request) bool {
 
 // seedDemo creates a deterministic bare repository with a short history.
 func (f *forge) seedDemo() {
+	// Keep the in-memory API fixture and Git fixture aligned on the demo repo.
 	work := filepath.Join(f.gitRoot, "octocat", "demo-work")
 	bare := filepath.Join(f.gitRoot, "octocat", "hello-world.git")
 	if err := os.MkdirAll(filepath.Dir(bare), 0755); err != nil {
