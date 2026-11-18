@@ -1,17 +1,9 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
 
 const root = dirname(fileURLToPath(import.meta.url));
-const binary = join(tmpdir(), `r7-forge-${process.pid}`);
-const build = spawn('go', ['build', '-o', binary, '.'], {
-  cwd: root,
-  stdio: 'inherit',
-  env: { ...process.env, GOCACHE: process.env.GOCACHE ?? join(tmpdir(), `r7-gocache-${process.pid}`) },
-});
-build.on('exit', code => {
-  if (code !== 0) process.exit(code ?? 1);
-  const server = spawn(binary, [], { stdio: 'inherit', env: process.env });
-  server.on('exit', status => process.exit(status ?? 1));
-});
+const server = spawn(join(root, 'forge'), [], { stdio: 'inherit', env: process.env });
+server.once('error', error => { console.error(error.message); process.exitCode = 1; });
+server.once('exit', (code, signal) => { process.exitCode = signal ? 1 : (code ?? 1); });
+for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => server.kill(signal));
