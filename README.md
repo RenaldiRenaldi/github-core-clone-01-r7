@@ -105,7 +105,7 @@ recorded below.
 The six-session transcript bundle is `/tmp/r7-transcripts.tar.gz`, SHA-256
 `e9ecd808bdf16cb391b6add8a213b85c9eec649a23321014f3dd1a618dc7899a`.
 `node cli/makefun.mjs check --repo <repo> --transcripts /tmp/r7-transcripts.tar.gz
---json` passed with no failed checks. `thinking_reproduces` passed at 35.2%,
+--json` passed with no failed checks. `thinking_reproduces` passed at 34.8%,
 `thinking_priced` passed with 144 usage records, and `thinking_revised` passed.
 `thinking_fresh` was skipped with a note because the six supplied sessions do
 not show the repository's new beacon anchor before their first counted write.
