@@ -62,20 +62,20 @@ smart HTTP URLs below the repository path.
 Verified with the stock Git CLI (server port assigned at startup):
 
 ```text
-$ git clone http://127.0.0.1:45335/octocat/hello-world.git /tmp/r7-no-git-clone
-Cloning into '/tmp/r7-no-git-clone'...
+$ git clone http://127.0.0.1:44399/octocat/hello-world.git /tmp/r7-final-clone
+Cloning into '/tmp/r7-final-clone'...
 9d7b4e6 Add greeting
 497de37 Initial demo
-$ git -C /tmp/r7-no-git-clone -c user.name=Fix2 -c user.email=fix2@example.test commit --allow-empty -m 'pure Go receive-pack smoke test'
-[main 8f4a5d7] pure Go receive-pack smoke test
+$ git -C /tmp/r7-final-clone -c user.name=Fix2 -c user.email=fix2@example.test commit --allow-empty -m 'final no git path push'
+[main 5fbc299] final no git path push
 $ git push origin main
-To http://127.0.0.1:45335/octocat/hello-world.git
-   9d7b4e6..8f4a5d7  main -> main
+To http://127.0.0.1:44399/octocat/hello-world.git
+   9d7b4e6..5fbc299  main -> main
 $ git ls-remote origin refs/heads/main
-8f4a5d78310eabb7a6bc2735695c027644c5c33a refs/heads/main
-$ git clone -q http://127.0.0.1:45335/octocat/hello-world.git /tmp/r7-no-git-fresh
-$ git -C /tmp/r7-no-git-fresh log -1 --oneline
-8f4a5d7 pure Go receive-pack smoke test
+5fbc2992f0bb8cbea88cf3b5e176d84e65564b0f refs/heads/main
+$ git clone -q http://127.0.0.1:44399/octocat/hello-world.git /tmp/r7-final-fresh
+$ git -C /tmp/r7-final-fresh log -1 --oneline
+5fbc299 final no git path push
 ```
 
 The server process was built first and launched with an empty PATH using
