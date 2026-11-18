@@ -131,8 +131,8 @@ The kit's grade-local run and final transcript checks are recorded below.
 
 ## Grade-local and final transcript checks
 
-The committed static executable scored **425/1000**, with 35/120 checks passed,
-on the kit's process driver at commit `f312717`. The run reproduced byte for
+The committed static executable scored **428/1000**, with 35/120 checks passed,
+on the kit's process driver at commit `5ecbe1a`. The run reproduced byte for
 byte across live and replay. Its four loopback workloads measured pushes,
 reads, and writes; shallow clone fetches failed because the server does not yet
 implement shallow negotiation. The kit's Docker driver could not start on this
