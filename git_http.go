@@ -3,17 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/hex"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
-// Git's bundled CGI backend implements the smart HTTP wire protocol, including
-// pkt-lines, side-band pack streams, and receive-pack ref transactions.
 func (f *forge) serveGit(w http.ResponseWriter, r *http.Request) bool {
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	if !strings.Contains(path, ".git/") {
@@ -34,95 +30,215 @@ func (f *forge) serveGit(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 	}
-	project := filepath.Join(f.gitRoot, parts[0], strings.TrimSuffix(parts[1], "/info/refs"))
-	if strings.HasSuffix(parts[1], "/git-upload-pack") {
-		project = filepath.Join(f.gitRoot, strings.TrimSuffix(path, "/git-upload-pack"))
-	}
-	if strings.HasSuffix(parts[1], "/git-receive-pack") {
-		project = filepath.Join(f.gitRoot, strings.TrimSuffix(path, "/git-receive-pack"))
-	}
-	if _, err := os.Stat(project); err != nil {
+	if f.objects == nil {
 		http.NotFound(w, r)
 		return true
 	}
-	var receiveBody []byte
-	if strings.HasSuffix(parts[1], "/git-receive-pack") {
-		var err error
-		receiveBody, err = io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "unable to read receive-pack request", 400)
-			return true
-		}
-		if stale, ref := f.staleReceivePack(project, receiveBody); stale {
-			writeJSON(w, 409, map[string]string{"message": "stale ref update rejected", "ref": ref})
-			return true
-		}
-		r.Body = io.NopCloser(bytes.NewReader(receiveBody))
+	if strings.HasSuffix(parts[1], "/git-upload-pack") {
+		f.handleUploadPack(w, r)
+	} else if strings.HasSuffix(parts[1], "/git-receive-pack") {
+		f.handleReceivePack(w, r)
+	} else {
+		http.NotFound(w, r)
 	}
-	env := append(os.Environ(), "GIT_PROJECT_ROOT="+f.gitRoot, "GIT_HTTP_EXPORT_ALL=1", "PATH_INFO=/"+path, "REMOTE_USER=", "REQUEST_METHOD="+r.Method, "QUERY_STRING="+r.URL.RawQuery, "CONTENT_TYPE="+r.Header.Get("Content-Type"), "CONTENT_LENGTH="+r.Header.Get("Content-Length"))
-	if proto := r.Header.Get("Git-Protocol"); proto != "" {
-		env = append(env, "HTTP_GIT_PROTOCOL="+proto)
-	}
-	cmd := exec.Command("git", "http-backend")
-	cmd.Env = env
-	cmd.Stdin = r.Body
-	out, err := cmd.Output()
-	if err != nil {
-		http.Error(w, "git backend failed", http.StatusBadGateway)
-		return true
-	}
-	i := bytes.Index(out, []byte("\r\n\r\n"))
-	sep := 4
-	if i < 0 {
-		i = bytes.Index(out, []byte("\n\n"))
-		sep = 2
-	}
-	if i < 0 {
-		http.Error(w, "invalid git backend response", 502)
-		return true
-	}
-	for _, line := range strings.Split(string(out[:i]), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Status:") {
-			var code int
-			fmt.Sscanf(strings.TrimPrefix(line, "Status:"), "%d", &code)
-			if code != 0 {
-				w.WriteHeader(code)
-			}
-			continue
-		}
-		if k, v, ok := strings.Cut(line, ":"); ok {
-			w.Header().Add(k, strings.TrimSpace(v))
-		}
-	}
-	w.Write(out[i+sep:])
 	return true
 }
 
-// Git's receive-pack command list starts with old/new/ref pkt-lines. Check all
-// advertised old values before invoking the backend, so a stale multi-ref push
-// cannot partially update any refs.
-func (f *forge) staleReceivePack(repoPath string, body []byte) (bool, string) {
+func (f *forge) handleUploadPack(w http.ResponseWriter, r *http.Request) {
+	body, e := io.ReadAll(r.Body)
+	if e != nil {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	rd := bytes.NewReader(body)
+	wants, haves := []string{}, []string{}
+	sideband := false
+	for {
+		line, e := DecodePktLine(rd)
+		if e != nil || line == nil {
+			break
+		}
+		s := strings.TrimSpace(string(line))
+		if bytes.Contains(line, []byte("side-band")) {
+			sideband = true
+		}
+		if z := strings.IndexByte(s, 0); z >= 0 {
+			s = s[:z]
+		}
+		fields := strings.Fields(s)
+		if len(fields) >= 2 && fields[0] == "want" {
+			wants = append(wants, fields[1])
+		}
+		if len(fields) >= 2 && fields[0] == "have" {
+			haves = append(haves, fields[1])
+		}
+	}
+	ids := f.objects.reachable(wants)
+	excluded := map[string]bool{}
+	for _, id := range f.objects.reachable(haves) {
+		excluded[id] = true
+	}
+	filtered := ids[:0]
+	for _, id := range ids {
+		if !excluded[id] {
+			filtered = append(filtered, id)
+		}
+	}
+	pack, e := f.objects.makePack(filtered)
+	if e != nil {
+		http.Error(w, e.Error(), 400)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(200)
+	if len(haves) > 0 {
+		_, _ = w.Write(EncodePktLine([]byte("ACK " + haves[len(haves)-1] + "\n")))
+	} else {
+		_, _ = w.Write(EncodePktLine([]byte("NAK\n")))
+	}
+	if sideband {
+		for len(pack) > 0 {
+			n := len(pack)
+			if n > 65515 {
+				n = 65515
+			}
+			payload := append([]byte{1}, pack[:n]...)
+			_, _ = w.Write(EncodePktLine(payload))
+			pack = pack[n:]
+		}
+		_, _ = w.Write(EncodeControlPacket(PacketFlush))
+	} else {
+		_, _ = w.Write(pack)
+	}
+}
+
+func (f *forge) handleReceivePack(w http.ResponseWriter, r *http.Request) {
+	body, e := io.ReadAll(r.Body)
+	if e != nil {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	rd := bytes.NewReader(body)
+	type update struct{ old, new, ref string }
+	updates := []update{}
+	for {
+		line, e := DecodePktLine(rd)
+		if e != nil {
+			http.Error(w, "malformed commands", 400)
+			return
+		}
+		if line == nil {
+			break
+		}
+		s := string(line)
+		if i := strings.IndexByte(s, 0); i >= 0 {
+			s = s[:i]
+		}
+		fields := strings.Fields(s)
+		if len(fields) < 3 {
+			http.Error(w, "malformed command", 400)
+			return
+		}
+		updates = append(updates, update{fields[0], fields[1], fields[2]})
+	}
+	pack, e := io.ReadAll(rd)
+	if e != nil {
+		http.Error(w, "bad pack", 400)
+		return
+	}
+	if len(pack) > 0 {
+		if e = f.objects.parsePack(pack); e != nil {
+			writeReceiveStatus(w, []byte("unpack "+e.Error()+"\n"), nil)
+			return
+		}
+	}
+	statuses := [][]byte{[]byte("unpack ok\n")}
+	prepared := []refUpdate{}
+	valid := true
+	for _, u := range updates {
+		current, ok := f.objects.ReadRef(u.ref)
+		if !ok {
+			current = "0000000000000000000000000000000000000000"
+		}
+		if current != u.old {
+			statuses = append(statuses, []byte("ng "+u.ref+" stale info\n"))
+			valid = false
+			continue
+		}
+		if u.new == "0000000000000000000000000000000000000000" {
+			statuses = append(statuses, []byte("ng "+u.ref+" ref deletion unsupported\n"))
+			valid = false
+			continue
+		}
+		if !f.objects.isAncestor(u.old, u.new) {
+			statuses = append(statuses, []byte("ng "+u.ref+" non-fast-forward\n"))
+			valid = false
+			continue
+		}
+		expected := u.old
+		if expected == "0000000000000000000000000000000000000000" {
+			expected = ""
+		}
+		prepared = append(prepared, refUpdate{u.ref, u.new, expected})
+	}
+	if valid {
+		if e := f.objects.UpdateRefs(prepared); e != nil {
+			for _, u := range updates {
+				statuses = append(statuses, []byte("ng "+u.ref+" "+e.Error()+"\n"))
+			}
+		} else {
+			for _, u := range updates {
+				statuses = append(statuses, []byte("ok "+u.ref+"\n"))
+			}
+		}
+	} else {
+		for _, u := range updates {
+			if !bytes.Contains(bytes.Join(statuses, nil), []byte("ng "+u.ref+" ")) {
+				statuses = append(statuses, []byte("ng "+u.ref+" atomic transaction aborted\n"))
+			}
+		}
+	}
+	writeReceiveStatus(w, nil, statuses)
+}
+
+func writeReceiveStatus(w http.ResponseWriter, first []byte, statuses [][]byte) {
+	w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(200)
+	if first != nil {
+		statuses = append([][]byte{first}, statuses...)
+	}
+	var report bytes.Buffer
+	for _, line := range statuses {
+		report.Write(EncodePktLine(line))
+	}
+	report.Write(EncodeControlPacket(PacketFlush))
+	_, _ = w.Write(EncodePktLine(append([]byte{1}, report.Bytes()...)))
+	_, _ = w.Write(EncodeControlPacket(PacketFlush))
+}
+
+func (f *forge) staleReceivePack(_ string, body []byte) (bool, string) {
 	r := bytes.NewReader(body)
 	for {
 		line, err := DecodePktLine(r)
 		if err != nil || line == nil {
 			return false, ""
 		}
-		if i := bytes.IndexByte(line, 0); i >= 0 {
-			line = line[:i]
+		text := string(line)
+		if i := strings.IndexByte(text, 0); i >= 0 {
+			text = text[:i]
 		}
-		fields := strings.Fields(string(line))
+		fields := strings.Fields(text)
 		if len(fields) < 3 {
 			return false, ""
 		}
-		old, ref := fields[0], fields[2]
-		current, err := exec.Command("git", "--git-dir="+repoPath, "rev-parse", "--verify", ref).Output()
-		if err != nil {
-			current = []byte("0000000000000000000000000000000000000000")
+		current, ok := f.objects.ReadRef(fields[2])
+		if !ok {
+			current = "0000000000000000000000000000000000000000"
 		}
-		if strings.TrimSpace(string(current)) != old {
-			return true, ref
+		if current != fields[0] {
+			return true, fields[2]
 		}
 	}
 }
@@ -198,10 +314,13 @@ func (f *forge) advertiseRefs(w http.ResponseWriter, service string) {
 	_, _ = w.Write(EncodePktLine([]byte("# service=" + service + "\n")))
 	_, _ = w.Write(EncodeControlPacket(PacketFlush))
 	refs := f.objects.HeadRefs()
-	capabilities := "multi_ack multi_ack_detailed thin-pack side-band side-band-64k ofs-delta agent=git-core-clone/1"
+	capabilities := "report-status delete-refs side-band-64k ofs-delta atomic agent=git-core-clone/1"
+	if service == "git-upload-pack" {
+		capabilities = "multi_ack multi_ack_detailed thin-pack side-band side-band-64k ofs-delta symref=HEAD:refs/heads/main agent=git-core-clone/1"
+	}
 	if len(refs) > 0 {
-		_, _ = w.Write(EncodePktLine([]byte(refs[0].id + " " + refs[0].name + "\x00" + capabilities + "\n")))
-		for _, ref := range refs[1:] {
+		_, _ = w.Write(EncodePktLine([]byte(refs[0].id + " HEAD\x00" + capabilities + "\n")))
+		for _, ref := range refs {
 			_, _ = w.Write(EncodePktLine([]byte(ref.id + " " + ref.name + "\n")))
 		}
 	}

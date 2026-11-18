@@ -26,7 +26,7 @@ func newObjectStore() *objectStore {
 }
 
 func (s *objectStore) WriteObject(kind string, content []byte) (string, error) {
-	if kind != "blob" && kind != "tree" && kind != "commit" {
+	if kind != "blob" && kind != "tree" && kind != "commit" && kind != "tag" {
 		return "", fmt.Errorf("unsupported object type %q", kind)
 	}
 	var raw bytes.Buffer
@@ -78,6 +78,25 @@ func (s *objectStore) UpdateRef(name, id, expected string) error {
 		return errors.New("ref target object does not exist")
 	}
 	s.refs[name] = id
+	return nil
+}
+
+type refUpdate struct{ name, id, expected string }
+
+func (s *objectStore) UpdateRefs(updates []refUpdate) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, u := range updates {
+		if s.refs[u.name] != u.expected {
+			return fmt.Errorf("ref compare-and-swap failed for %s", u.name)
+		}
+		if _, ok := s.objects[u.id]; !ok {
+			return fmt.Errorf("ref target object does not exist")
+		}
+	}
+	for _, u := range updates {
+		s.refs[u.name] = u.id
+	}
 	return nil
 }
 

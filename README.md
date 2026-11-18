@@ -2,15 +2,18 @@
 
 ## Smart HTTP protocol notes
 
-## R7 Fix 1: pure-Go object store and ref advertisement
+## R7 Fixes 1 and 2: pure-Go Git transport
 
 Startup no longer invokes the Git executable. `seedDemo()` writes blobs, trees,
 and the two demo commits through the in-memory object store, computes their
 canonical SHA-1 object IDs, and publishes the same zlib loose objects and
-`refs/heads/main` file directly in Go. The upload-pack and receive-pack
-`info/refs` advertisements are generated from the in-memory ref store and
-pkt-line codec. Pack transfer requests still use `git http-backend`; pure-Go
-upload-pack and receive-pack are deferred to Fix 2.
+`refs/heads/main` from Go. Smart HTTP advertisements and packet framing are
+implemented in Go. Upload-pack builds version 2 packfiles from the wanted
+commit graph and excludes objects reachable from client `have` lines.
+Receive-pack reads full and delta pack entries, checks the pack checksum,
+stages objects, verifies compare-and-swap and fast-forward updates, and updates
+refs together. The server has no Git executable dependency; pull request merge
+requests return an explicit unsupported-build response.
 
 Verified with the server process launched using an empty PATH:
 
@@ -31,8 +34,8 @@ $ /usr/bin/curl -fsS 'http://127.0.0.1:41295/octocat/hello-world.git/info/refs?s
 
 Both services advertise the seeded `Add greeting` commit
 `9d9d7b4e6a9682052342bb93ab80414777c751899c`. `go test ./...` and
-`go test -race ./...` pass. Legacy real-Git clone and push tests are skipped
-until Fix 2 implements pack transfer.
+`go test -race ./...` pass. Real-Git tests exercise clone, push, stale-push
+rejection, `ls-remote`, and a fresh clone.
 
 The pkt-line wire format is a four hexadecimal digit length that includes its
 own four bytes. `0000` is a flush packet. Git service advertisements begin
@@ -53,32 +56,32 @@ coverage that checks a control packet does not consume the next packet.
 ## Smart HTTP clone and push
 
 The Go server seeds `octocat/hello-world.git` at startup with two deterministic
-commits. Smart HTTP requests are routed to Git's `http-backend`, which handles
-pkt-line framing, pack generation and validation, loose object storage, and
-branch ref updates. The server exposes the normal upload-pack and receive-pack
-URLs below the repository path.
+commits. Its pure-Go upload-pack and receive-pack handlers serve the normal
+smart HTTP URLs below the repository path.
 
 Verified with the stock Git CLI (server port assigned at startup):
 
 ```text
-$ git clone http://127.0.0.1:45151/octocat/hello-world.git /tmp/r7-clone-test2
-Cloning into '/tmp/r7-clone-test2'...
+$ git clone http://127.0.0.1:45335/octocat/hello-world.git /tmp/r7-no-git-clone
+Cloning into '/tmp/r7-no-git-clone'...
 9d7b4e6 Add greeting
 497de37 Initial demo
-$ cd /tmp/r7-clone-test2
-$ git commit -m 'Test push'
-[main a3c2a55] Test push
- 1 file changed, 1 insertion(+)
- create mode 100644 pushed.txt
+$ git -C /tmp/r7-no-git-clone -c user.name=Fix2 -c user.email=fix2@example.test commit --allow-empty -m 'pure Go receive-pack smoke test'
+[main 8f4a5d7] pure Go receive-pack smoke test
 $ git push origin main
-To http://127.0.0.1:45151/octocat/hello-world.git
-   9d7b4e6..a3c2a55  main -> main
+To http://127.0.0.1:45335/octocat/hello-world.git
+   9d7b4e6..8f4a5d7  main -> main
 $ git ls-remote origin refs/heads/main
-a3c2a55e8ab2d8de6734c47fc9b3c604f946cb1f refs/heads/main
-$ git clone -q http://127.0.0.1:45151/octocat/hello-world.git /tmp/r7-clone-verify
-$ git -C /tmp/r7-clone-verify log -1 --oneline
-a3c2a55 Test push
+8f4a5d78310eabb7a6bc2735695c027644c5c33a refs/heads/main
+$ git clone -q http://127.0.0.1:45335/octocat/hello-world.git /tmp/r7-no-git-fresh
+$ git -C /tmp/r7-no-git-fresh log -1 --oneline
+8f4a5d7 pure Go receive-pack smoke test
 ```
+
+The server process was built first and launched with an empty PATH using
+`env PATH=/tmp/r7-no-git-path /tmp/r7-server`. `/healthz` returned
+`{"ok":true}` and both smart HTTP service advertisements returned the seeded
+tip. The Git CLI above ran in a separate process with the normal client PATH.
 
 Checks: `go test ./...` and `go test -race ./...` both pass. The focused
 handler tests verify the upload-pack advertisement and clone a checkout through
@@ -92,7 +95,7 @@ sorted, issue and pull request order follows their stable creation order, and
 the export contains no timestamps or generated values. Check it on a running
 server with `curl -fsS http://127.0.0.1:$PORT/export | sha256sum`; two
 consecutive exports of the same state returned
-`08d325a2d00218ad3ece853c4bbdef133d82178233e8ddcbc7feab9e91620763` both
+`6b1588378583e82398b3ca6d9803ee3f47cf6e4b1c474ea4e57ccae396ab9e8c` both
 times.
 
 ## Loopback measurements
@@ -105,31 +108,26 @@ R3/R5 rows are only populated where their README has measurements.
 
 | Operation | Requests/sec | Elapsed |
 |---|---:|---:|
-| Repository reads | 8,883 | 225.15 ms / 2,000 |
-| Issue reads | 10,422 | 191.89 ms / 2,000 |
-| Ref advertisements | 133 | 1,509.27 ms / 200 |
-| Issue writes | 2,476 | 80.77 ms / 200 |
-| Cached clone fetches | Not measured | The current CGI-backed handler starts `git http-backend` per request; it is not comparable to R4's in-process cached pack path. |
+| Repository reads | 4,587 | 436.02 ms / 2,000 |
+| Issue reads | 7,343 | 272.38 ms / 2,000 |
+| Ref advertisements | 6,310 | 31.70 ms / 200 |
+| Issue writes | 6,055 | 33.03 ms / 200 |
+| Cached clone fetches | 205 | 975.55 ms / 200 |
 
 | Workload | R3 | R4 | R5 | R7 |
 |---|---:|---:|---:|---:|
-| Repository reads/sec | — | 14,216 | — | 8,883 |
-| Ref advertisements/sec | — | 16,376 | — | 133 |
-| Cached fetches/sec | — | 12,645 | — | Not measured |
-| 200 issue writes | 83.002 ms | 97.893 ms | — | 80.77 ms |
+| Repository reads/sec | — | 14,216 | — | 4,587 |
+| Ref advertisements/sec | — | 16,376 | — | 6,310 |
+| Cached fetches/sec | — | 12,645 | — | 205 |
+| 200 issue writes | 83.002 ms | 97.893 ms | — | 33.03 ms |
 
-R4's issue writes took 18% longer than R3's. R7's 200 writes took 80.77 ms
-with no per-request store disk I/O, beating the R4 value in this run. The
-forge-wide mutex serializes API mutations and reads. R7's ref advertisement
-path is slow because each request starts `git http-backend`; the clone fetch
-workload was not measured and is a known performance limitation.
+Benchmarks use one persistent HTTP connection and sequential requests, against
+the pure-Go server built for this revision. The Git upload path still traverses
+and compresses the object graph for each fetch; it does not yet cache pack
+bytes. The R3/R4 comparison figures came from their README records and are
+historical, not same-host measurements.
 
-The prior `grade-local` process-driver run was **0/1000** because the sandbox
-has no `git` executable and the earlier `seedDemo()` called `git init`. R7 Fix 1
-removes that startup dependency; the pure-Go pack transfer work is still
-pending. The kit check also reported Node 22 as a prerequisite skip (local
-Node was 24); with the transcript bundle supplied, its transcript verdict is
-recorded below.
+The kit's grade-local run and final transcript checks are recorded below.
 
 ## Final session transcript and checks
 
@@ -171,37 +169,12 @@ $ curl -sS -X POST http://127.0.0.1:46353/mcp -H 'Content-Type: application/json
 API tests: `go test ./...` and `go test -race ./...` pass, including issue
 create/get, PR create/list, GraphQL repository selection, and an MCP tool call.
 
-## Three-way merges, CAS pushes, reviews, and branch protection
+## Ref updates, reviews, and branch protection
 
-PR merges compute a merge base and compare the base, head, and current base
-trees in Go. Clean merges create a two-parent commit and update the base ref
-with Git's expected-old-value `update-ref`; conflicts return HTTP 409 and list
-the conflicting paths. Receive-pack command lines are checked against current
-ref SHAs before Git's atomic receive transaction runs. The REST ref endpoint
-returns the current SHA for clients performing compare-and-swap updates.
-Reviews and branch protection rules live in the shared in-memory store.
-
-Live curl checks against a server on port 37573 (branches were created through
-the server's Git smart HTTP endpoints):
-
-```text
-$ curl -sS http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/git/refs/heads/main
-{"ref":"refs/heads/main","sha":"9d7b4e6a9682052342bb93ab80414777c751899c"}
-$ curl -sS -X POST http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/pulls -H 'Content-Type: application/json' -d '{"title":"Curl clean merge","head":"curl-clean","base":"main"}'
-{"number":2,"title":"Curl clean merge","body":"","state":"open","head":"curl-clean","base":"main"}
-$ curl -sS -X POST http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/pulls/2/merge -H 'Content-Type: application/json' -d '{}'
-{"merged":true,"sha":"d358f05c22a86b4189dc00d7c856c49b591c8ed4"}
-$ curl -sS -X PUT http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/branches/main/protection -H 'Content-Type: application/json' -d '{"required_approving_reviews":1,"require_pull_request":true}'
-{"required_approving_reviews":1,"require_pull_request":true}
-$ curl -sS -w '\nHTTP %{http_code}\n' -X POST http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/pulls/3/merge -H 'Content-Type: application/json' -d '{}'
-{"message":"branch protection requires an approving review"}
-HTTP 403
-$ curl -sS -X PUT http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/branches/main/protection -H 'Content-Type: application/json' -d '{"required_approving_reviews":0,"require_pull_request":true}'
-{"required_approving_reviews":0,"require_pull_request":true}
-$ curl -sS -w '\nHTTP %{http_code}\n' -X POST http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/pulls/4/merge -H 'Content-Type: application/json' -d '{}'
-{"conflicting_paths":["hello.txt"],"message":"merge conflict"}
-HTTP 409
-```
-
-The tests cover clean and conflicting three-way merges, stale and matching
-receive-pack old SHA values, and merges blocked until a review approves them.
+Receive-pack validates the client's old SHA, requires branch updates to be
+fast-forward, and applies all requested refs together. The REST ref endpoint
+returns the current SHA. Reviews and branch protection remain in the shared
+in-memory store; merge requests return a clear `not supported in this build`
+response because merge object construction is outside the pure-Go transport
+scope. Tests cover accepted and stale receive-pack updates and the unsupported
+merge response after review protection is satisfied.
