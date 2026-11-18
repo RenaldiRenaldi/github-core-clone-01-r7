@@ -144,7 +144,7 @@ Fix 1, and Fix 2 sessions) is
 `/home/hatch/workspace/makefun/github-core-clone-01-r7-fix2-final.tar.gz`,
 SHA-256 `18b5fb4909fa2798390983870c4bb4ce2d4b2b93f82cb012ebc8b194199653bf`.
 The kit check against this bundle passed with no failed checks:
-`thinking_reproduces` passed at 32.0%, `thinking_priced` passed with 468 usage
+`thinking_reproduces` passed at 31.9%, `thinking_priced` passed with 468 usage
 records, and `thinking_revised` passed. `thinking_fresh` was skipped as a note:
 the sessions predate the newer freshness anchor. The prerequisite check skipped
 Node 22 because this VM runs Node 24.22.1.
