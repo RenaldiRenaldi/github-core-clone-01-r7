@@ -92,6 +92,14 @@ forge-wide mutex serializes API mutations and reads. R7's ref advertisement
 path is slow because each request starts `git http-backend`; the clone fetch
 workload was not measured and is a known performance limitation.
 
+The committed `grade-local` process-driver run was **0/1000, not working**.
+The sandbox has no `git` executable, and startup panics in `seedDemo()` at
+`git init -b main`. The launcher cache issue is fixed, but this runtime
+dependency violates the kit's no-Git requirement and prevents a passing kit
+grade. The kit check also reports Node 22 as a prerequisite skip (local Node is
+24); with the transcript bundle supplied, its complete transcript verdict is
+recorded below after running the check.
+
 ## REST, GraphQL, MCP, and web UI
 
 The server shares one mutex-protected in-memory repository, issue, and pull
