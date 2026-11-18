@@ -261,8 +261,8 @@ operations, clone 124.794 ms / 50, reads 938.996 ms / 2,000, and writes
 
 The Fix 5 transcript bundle is
 `/home/hatch/workspace/makefun/github-core-clone-01-r7-fix5-final.tar.gz`.
-Its check parsed 12 sessions, passed `thinking_reproduces` at 35.1%, passed
-`thinking_priced` with 662 priced usage records, and passed `thinking_revised`;
+Its check parsed 12 sessions, passed `thinking_reproduces` at 37.0%, passed
+`thinking_priced` with 698 priced usage records, and passed `thinking_revised`;
 there were no failed checks. `thinking_fresh` was a note because those sessions
 do not show the newer anchor before their first counted writes. The prerequisite
 check skipped Node 22 because this VM runs Node 24.22.1.
