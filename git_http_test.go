@@ -333,6 +333,83 @@ func TestUploadPackV2ShallowExchange(t *testing.T) {
 	}
 }
 
+func TestUploadPackV2DeepenMovesBoundaryAndSendsMissingParent(t *testing.T) {
+	f := testForge(t)
+	previous, _ := f.objects.ReadRefIn("octocat/hello-world", "refs/heads/main")
+	_, data, err := f.objects.ReadObject(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "tree" {
+			tree = fields[1]
+		}
+	}
+	if tree == "" {
+		t.Fatal("seed tip has no tree")
+	}
+	tip, err := f.objects.WriteObject("commit", []byte(demoCommit(tree, previous, "Third demo commit")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.objects.UpdateRefIn("octocat/hello-world", "refs/heads/main", tip, previous); err != nil {
+		t.Fatal(err)
+	}
+
+	var request bytes.Buffer
+	request.Write(EncodePktLine([]byte("command=fetch\n")))
+	request.Write(EncodeControlPacket(PacketDelimiter))
+	request.Write(EncodePktLine([]byte("deepen 2\n")))
+	request.Write(EncodePktLine([]byte("want " + tip + "\n")))
+	request.Write(EncodePktLine([]byte("shallow " + tip + "\n")))
+	request.Write(EncodePktLine([]byte("have " + tip + "\n")))
+	request.Write(EncodePktLine([]byte("done\n")))
+	request.Write(EncodeControlPacket(PacketFlush))
+	r := httptest.NewRequest("POST", "/git-upload-pack", &request)
+	r.Header.Set("Git-Protocol", "version=2")
+	w := httptest.NewRecorder()
+	f.handleUploadPackFor(w, r, "octocat/hello-world")
+	response := bytes.NewReader(w.Body.Bytes())
+	for _, want := range []string{"shallow-info\n", "unshallow " + tip + "\n", "shallow " + previous + "\n"} {
+		line, err := DecodePktLine(response)
+		if err != nil || string(line) != want {
+			t.Fatalf("boundary packet = %q, %v; want %q", line, err, want)
+		}
+	}
+	if line, err := DecodePktLine(response); err != nil || len(line) != 0 {
+		t.Fatalf("shallow-info delimiter = %q, %v", line, err)
+	}
+	if line, err := DecodePktLine(response); err != nil || string(line) != "packfile\n" {
+		t.Fatalf("pack marker = %q, %v", line, err)
+	}
+	var packed bytes.Buffer
+	for {
+		line, err := DecodePktLine(response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == nil {
+			break
+		}
+		if len(line) == 0 || line[0] != 1 {
+			t.Fatalf("unexpected sideband packet %q", line)
+		}
+		packed.Write(line[1:])
+	}
+	copyStore := newObjectStore()
+	if err := copyStore.parsePack(packed.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := copyStore.ReadObject(previous); err != nil {
+		t.Fatalf("deepened pack missing newly exposed parent: %v", err)
+	}
+	if _, _, err := copyStore.ReadObject(tip); err == nil {
+		t.Fatal("deepened pack resent the shallow commit the client already has")
+	}
+}
+
 func TestUploadPackCachesIdenticalPack(t *testing.T) {
 	f := testForge(t)
 	tip, _ := f.objects.ReadRef("refs/heads/main")

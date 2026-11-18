@@ -188,8 +188,14 @@ func (f *forge) handleUploadPackFor(w http.ResponseWriter, r *http.Request, name
 		ids, boundaries = f.objects.filterDeepen(ids, boundaries, deepenSince, deepenNot)
 	}
 	excluded := map[string]bool{}
-	for _, id := range f.objects.reachable(haves) {
-		excluded[id] = true
+	if len(clientShallow) > 0 {
+		for _, id := range haves {
+			excluded[id] = true
+		}
+	} else {
+		for _, id := range f.objects.reachable(haves) {
+			excluded[id] = true
+		}
 	}
 	filtered := ids[:0]
 	for _, id := range ids {
