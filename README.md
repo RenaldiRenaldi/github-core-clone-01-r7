@@ -233,6 +233,44 @@ The kit's grade-local run and final transcript checks are recorded below.
 
 ## Grade-local and final transcript checks
 
+Fix 5's latest committed static-binary process grade is **526/1000** at
+`f09ef7c` (41/120 feature checks; agent 133, feature 205, performance 188,
+`perf_p50_us` 233,363). L1 replay reproduced byte-for-byte. The protocol v2
+advertisement, depth-1 shallow fetch, shallow new-tip fetch, and shallow deepen
+checks pass. The target of 950 was not reached. The remaining failed checks
+reported by the public harness are:
+
+| Group | Failed checks |
+|---|---|
+| Git | `git.clone-annotated-tag`, `git.ls-refs`, `git.ls-refs-prefix`, `git.push-delete-branch`, `git.push-delete-tag`, `git.push-mixed-report` |
+| GraphQL | `graphql.add-comment`, `graphql.batched-operations`, `graphql.close-issue`, `graphql.create-issue`, `graphql.create-pull-request`, `graphql.global-id-stability`, `graphql.introspection-issue`, `graphql.introspection-types`, `graphql.invalid-field`, `graphql.issue-by-number`, `graphql.issues-open-order`, `graphql.issues-pagination`, `graphql.merge-pull-request`, `graphql.node-repository`, `graphql.pull-request-files`, `graphql.pull-requests-list`, `graphql.repository-fields`, `graphql.viewer-login` |
+| Issues | `issues.bad-label`, `issues.comment-create`, `issues.comments-list`, `issues.create`, `issues.create-labels`, `issues.create-title-body`, `issues.get-one`, `issues.list-open`, `issues.list-open-excludes-closed`, `issues.list-shape`, `issues.list-sort-asc`, `issues.list-sort-desc`, `issues.numbers-increment`, `issues.patch-close`, `issues.patch-close-persists` |
+| MCP | `mcp.create-pull-request`, `mcp.merge-pull-request`, `mcp.parse-error`, `mcp.rest-parity`, `mcp.unknown-tool` |
+| Protocol | `protocol.content-type-json`, `protocol.error-message`, `protocol.malformed-body-400`, `protocol.request-id` |
+| Pull requests | `pulls.create`, `pulls.create-base-sha`, `pulls.create-body`, `pulls.create-head-sha`, `pulls.files-list`, `pulls.files-multiple`, `pulls.files-shape`, `pulls.get-one`, `pulls.get-unknown`, `pulls.list-default-open`, `pulls.list-shape`, `pulls.list-state-all`, `pulls.merge-body`, `pulls.merge-closes`, `pulls.merge-commit-on-default`, `pulls.merge-commit-sha`, `pulls.merge-conflict`, `pulls.merge-content-on-default`, `pulls.merge-status`, `pulls.merge-unknown` |
+| Repositories | `repos.branches`, `repos.commits`, `repos.contents-create`, `repos.contents-delete`, `repos.contents-directory`, `repos.contents-stale-sha`, `repos.create`, `repos.delete`, `repos.pagination`, `repos.patch`, `repos.unauthorized` |
+
+The harness export records check pass bits but no per-check assertion text.
+These failures are outside upload-pack shallow negotiation; this session fixed
+the shallow v2 fetch/deepen path and did not implement the broader API and ref
+behaviors named above. Performance measurements from this run were push
+636.484 ms / 200 operations, clone 81.748 ms / 50, reads 666.924 ms / 2,000,
+and writes 85.465 ms / 200. The separate cached v2 fetch loopback measurement
+above was 2,087.1 requests/sec.
+
+The Fix 5 transcript bundle is
+`/home/hatch/workspace/makefun/github-core-clone-01-r7-fix5-final.tar.gz`.
+Its check parsed 12 sessions, passed `thinking_reproduces` at 35.1%, passed
+`thinking_priced` with 662 priced usage records, and passed `thinking_revised`;
+there were no failed checks. `thinking_fresh` was a note because those sessions
+do not show the newer anchor before their first counted writes. The prerequisite
+check skipped Node 22 because this VM runs Node 24.22.1.
+
+The final empty-PATH run also completed clone, push, and fresh-clone checks. A
+commit `412fc0a48428394b858e967f77ef225eff99a19e` pushed to `main`, appeared in
+`git ls-remote`, and was the tip of the fresh clone. Two `/export` calls both
+hashed to `7a8c71bc66c5b0f110a134da6df873340b7d93d95947986e0864b9c1a1a11a62`.
+
 Historical grade: the static executable scored **428/1000**, with 35/120 checks
 passed, on the kit's process driver at commit `5ecbe1a`. The run reproduced
 byte for byte across live and replay. Shallow clone fetches failed at that
