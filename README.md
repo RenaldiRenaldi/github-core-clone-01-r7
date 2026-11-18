@@ -16,6 +16,14 @@ depth-2 boundary tests only verify object selection, not the complete HTTP
 negotiation. Fix 3 is therefore incomplete and has not reached its grade
 target.
 
+The continuation's committed process-driver grade at `8274c5b` was **441/1000**
+(agent 133, feature 175, performance 133; working 1). Live and replay both
+finished, and L1 regrade reproduced byte-for-byte. The entry made no model
+calls, so this run does not satisfy transcript coverage or priced-thinking
+gates. This grade is below the requested target. Two exports from the running
+empty-PATH server both hashed to
+`7a8c71bc66c5b0f110a134da6df873340b7d93d95947986e0864b9c1a1a11a62`.
+
 ## Smart HTTP protocol notes
 
 ## R7 Fixes 1 and 2: pure-Go Git transport
