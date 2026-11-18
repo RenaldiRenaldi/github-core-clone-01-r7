@@ -98,7 +98,7 @@ $ curl -sS http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/git/refs/head
 $ curl -sS -X POST http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/pulls -H 'Content-Type: application/json' -d '{"title":"Curl clean merge","head":"curl-clean","base":"main"}'
 {"number":2,"title":"Curl clean merge","body":"","state":"open","head":"curl-clean","base":"main"}
 $ curl -sS -X POST http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/pulls/2/merge -H 'Content-Type: application/json' -d '{}'
-{"merged":"true","sha":"d358f05c22a86b4189dc00d7c856c49b591c8ed4"}
+{"merged":true,"sha":"d358f05c22a86b4189dc00d7c856c49b591c8ed4"}
 $ curl -sS -X PUT http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/branches/main/protection -H 'Content-Type: application/json' -d '{"required_approving_reviews":1,"require_pull_request":true}'
 {"required_approving_reviews":1,"require_pull_request":true}
 $ curl -sS -w '\nHTTP %{http_code}\n' -X POST http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/pulls/3/merge -H 'Content-Type: application/json' -d '{}'
