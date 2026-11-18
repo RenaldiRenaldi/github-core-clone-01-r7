@@ -5,6 +5,17 @@ import (
 	"io"
 )
 
+// PacketKind identifies the three control packets used by Git's pkt-line
+// transport in addition to ordinary data packets.
+type PacketKind uint8
+
+const (
+	PacketData PacketKind = iota
+	PacketFlush
+	PacketDelimiter
+	PacketResponseEnd
+)
+
 // EncodePktLine encodes payload as a Git smart-HTTP pkt-line. An empty
 // payload is encoded as the special flush-pkt.
 func EncodePktLine(payload []byte) []byte {
@@ -19,6 +30,22 @@ func EncodePktLine(payload []byte) []byte {
 	copy(encoded[:4], fmt.Sprintf("%04x", length))
 	copy(encoded[4:], payload)
 	return encoded
+}
+
+// EncodeControlPacket serializes a control packet. It keeps control markers
+// distinct from data packets, which is important when assembling multi-part
+// smart-HTTP exchanges.
+func EncodeControlPacket(kind PacketKind) []byte {
+	switch kind {
+	case PacketFlush:
+		return []byte("0000")
+	case PacketDelimiter:
+		return []byte("0001")
+	case PacketResponseEnd:
+		return []byte("0002")
+	default:
+		return nil
+	}
 }
 
 // DecodePktLine reads one Git smart-HTTP pkt-line. A flush-pkt returns
@@ -42,7 +69,7 @@ func DecodePktLine(r io.Reader) ([]byte, error) {
 			return nil, fmt.Errorf("invalid pkt-line length digit %q", digit)
 		}
 	}
-	if length == 0 {
+	if length == 0 || length == 1 || length == 2 {
 		return nil, nil
 	}
 	if length < 4 {

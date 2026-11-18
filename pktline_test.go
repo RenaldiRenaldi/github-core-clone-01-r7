@@ -48,3 +48,35 @@ func TestPktLineLargePayload(t *testing.T) {
 		t.Fatalf("decoded payload length = %d, want %d", len(decoded), len(want))
 	}
 }
+
+func TestControlPacketsAreExactAndDoNotConsumeFollowingPacket(t *testing.T) {
+	for _, tc := range []struct {
+		kind PacketKind
+		wire string
+	}{
+		{PacketFlush, "0000"},
+		{PacketDelimiter, "0001"},
+		{PacketResponseEnd, "0002"},
+	} {
+		if got := string(EncodeControlPacket(tc.kind)); got != tc.wire {
+			t.Fatalf("control packet = %q, want %q", got, tc.wire)
+		}
+		stream := bytes.NewBufferString(tc.wire + "0005x")
+		got, err := DecodePktLine(stream)
+		if err != nil || got != nil {
+			t.Fatalf("DecodePktLine(%q) = %q, %v", tc.wire, got, err)
+		}
+		next, err := DecodePktLine(stream)
+		if err != nil || string(next) != "x" {
+			t.Fatalf("following data packet = %q, %v", next, err)
+		}
+	}
+}
+
+func TestMalformedAndShortPktLines(t *testing.T) {
+	for _, wire := range []string{"0003", "00xz", "000"} {
+		if _, err := DecodePktLine(bytes.NewBufferString(wire)); err == nil {
+			t.Errorf("DecodePktLine(%q) unexpectedly succeeded", wire)
+		}
+	}
+}
