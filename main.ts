@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const binary = join(tmpdir(), `r7-forge-${process.pid}`);
-const build = spawn('go', ['build', '-o', binary, '.'], { cwd: root, stdio: 'inherit' });
+const build = spawn('go', ['build', '-o', binary, '.'], {
+  cwd: root,
+  stdio: 'inherit',
+  env: { ...process.env, GOCACHE: process.env.GOCACHE ?? join(tmpdir(), `r7-gocache-${process.pid}`) },
+});
 build.on('exit', code => {
   if (code !== 0) process.exit(code ?? 1);
   const server = spawn(binary, [], { stdio: 'inherit', env: process.env });
