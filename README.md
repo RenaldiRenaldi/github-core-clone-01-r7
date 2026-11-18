@@ -129,18 +129,25 @@ historical, not same-host measurements.
 
 The kit's grade-local run and final transcript checks are recorded below.
 
-## Final session transcript and checks
+## Grade-local and final transcript checks
 
-The six-session transcript bundle is `/tmp/r7-transcripts.tar.gz`, SHA-256
-`e9ecd808bdf16cb391b6add8a213b85c9eec649a23321014f3dd1a618dc7899a`.
-`node cli/makefun.mjs check --repo <repo> --transcripts /tmp/r7-transcripts.tar.gz
---json` passed with no failed checks. `thinking_reproduces` passed at 34.8%,
-`thinking_priced` passed with 144 usage records, and `thinking_revised` passed.
-`thinking_fresh` was skipped with a note because the six supplied sessions do
-not show the repository's new beacon anchor before their first counted write.
-The kit check passed its code and license checks; Node 22 was skipped under the
-installed Node 24 runtime. The historical grade-local process-driver score was
-0/1000 because the old startup path required Git.
+The committed static executable scored **425/1000**, with 35/120 checks passed,
+on the kit's process driver at commit `f312717`. The run reproduced byte for
+byte across live and replay. Its four loopback workloads measured pushes,
+reads, and writes; shallow clone fetches failed because the server does not yet
+implement shallow negotiation. The kit's Docker driver could not start on this
+VM: `spawnSync docker ENOENT`. The process run used Node 24.22.1 while the kit
+specifies Node 26.13.1. This is below the 950-point target.
+
+The nine-session bundle (test, build-1, core, smart HTTP, API, merges/final,
+Fix 1, and Fix 2 sessions) is
+`/home/hatch/workspace/makefun/github-core-clone-01-r7-fix2-transcripts.tar.gz`,
+SHA-256 `29e3dd35c7970a1fff6c63217f9b5498f890cbab6cb716e70b672684332ab93b`.
+The kit check against this bundle passed with no failed checks:
+`thinking_reproduces` passed at 31.9%, `thinking_priced` passed with 426 usage
+records, and `thinking_revised` passed. `thinking_fresh` was skipped as a note:
+the sessions predate the newer freshness anchor. The prerequisite check skipped
+Node 22 because this VM runs Node 24.22.1.
 
 ## REST, GraphQL, MCP, and web UI
 
