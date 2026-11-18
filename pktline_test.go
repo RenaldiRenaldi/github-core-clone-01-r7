@@ -1,4 +1,4 @@
-package pktline
+package main
 
 import (
 	"bytes"
@@ -31,6 +31,18 @@ func TestPktLineFlush(t *testing.T) {
 	}
 	if decoded != nil {
 		t.Fatalf("DecodePktLine() = %v, want nil", decoded)
+	}
+}
+
+func TestControlPacketDecoderKeepsStreamPosition(t *testing.T) {
+	stream := bytes.NewBufferString("00010005x")
+	got, err := DecodePktLine(stream)
+	if err != nil || got != nil {
+		t.Fatalf("delimiter decode = %q, %v", got, err)
+	}
+	got, err = DecodePktLine(stream)
+	if err != nil || string(got) != "x" {
+		t.Fatalf("next packet = %q, %v", got, err)
 	}
 }
 

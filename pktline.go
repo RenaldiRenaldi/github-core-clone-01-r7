@@ -1,12 +1,11 @@
-package pktline
+package main
 
 import (
 	"fmt"
 	"io"
 )
 
-// PacketKind identifies the three control packets used by Git's pkt-line
-// transport in addition to ordinary data packets.
+// PacketKind labels a non-data pkt-line marker.
 type PacketKind uint8
 
 const (
@@ -16,8 +15,7 @@ const (
 	PacketResponseEnd
 )
 
-// EncodePktLine encodes payload as a Git smart-HTTP pkt-line. An empty
-// payload is encoded as the special flush-pkt.
+// EncodePktLine writes a payload with its four-byte hexadecimal size prefix.
 func EncodePktLine(payload []byte) []byte {
 	if len(payload) == 0 {
 		return []byte("0000")
@@ -32,9 +30,7 @@ func EncodePktLine(payload []byte) []byte {
 	return encoded
 }
 
-// EncodeControlPacket serializes a control packet. It keeps control markers
-// distinct from data packets, which is important when assembling multi-part
-// smart-HTTP exchanges.
+// EncodeControlPacket returns the wire marker associated with kind.
 func EncodeControlPacket(kind PacketKind) []byte {
 	switch kind {
 	case PacketFlush:
@@ -48,8 +44,7 @@ func EncodeControlPacket(kind PacketKind) []byte {
 	}
 }
 
-// DecodePktLine reads one Git smart-HTTP pkt-line. A flush-pkt returns
-// (nil, nil).
+// DecodePktLine consumes one complete pkt-line; control markers return nil.
 func DecodePktLine(r io.Reader) ([]byte, error) {
 	header := make([]byte, 4)
 	if _, err := io.ReadFull(r, header); err != nil {
