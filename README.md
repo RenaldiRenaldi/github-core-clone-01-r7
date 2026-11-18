@@ -142,9 +142,9 @@ specifies Node 26.13.1. This is below the 950-point target.
 The nine-session bundle (test, build-1, core, smart HTTP, API, merges/final,
 Fix 1, and Fix 2 sessions) is
 `/home/hatch/workspace/makefun/github-core-clone-01-r7-fix2-final.tar.gz`,
-SHA-256 `5411592131f3bb3b4cb793974e260e20bd7e03543262a8d74d6f6e3806c7aab5`.
+SHA-256 `c1b631040c836489b6c7e18f7aaa03abbf5e580cca35464258d16871e1742716`.
 The kit check against this bundle passed with no failed checks:
-`thinking_reproduces` passed at 32.0%, `thinking_priced` passed with 433 usage
+`thinking_reproduces` passed at 32.0%, `thinking_priced` passed with 441 usage
 records, and `thinking_revised` passed. `thinking_fresh` was skipped as a note:
 the sessions predate the newer freshness anchor. The prerequisite check skipped
 Node 22 because this VM runs Node 24.22.1.
