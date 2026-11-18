@@ -36,6 +36,17 @@ func TestSmartHTTPAdvertisement(t *testing.T) {
 	}
 }
 
+func TestRefCASEndpointReportsCurrentSHA(t *testing.T) {
+	f := testForge(t)
+	f.repos["octocat/hello-world"] = &repo{Owner: "octocat", Name: "hello-world"}
+	r := httptest.NewRequest("GET", "/api/v3/repos/octocat/hello-world/git/refs/heads/main", nil)
+	w := httptest.NewRecorder()
+	f.ServeHTTP(w, r)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"sha"`) {
+		t.Fatalf("ref response = %d %s", w.Code, w.Body)
+	}
+}
+
 func TestSmartHTTPCloneRoundTrip(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git CLI unavailable")
@@ -52,5 +63,46 @@ func TestSmartHTTPCloneRoundTrip(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dst, name)); err != nil {
 			t.Fatalf("clone missing %s: %v", name, err)
 		}
+	}
+}
+
+func TestSmartHTTPPushCASAcceptsCurrentAndRejectsStale(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git CLI unavailable")
+	}
+	f := testForge(t)
+	s := httptest.NewServer(f)
+	defer s.Close()
+	clone := func(dst string) {
+		c := exec.Command("git", "clone", "-q", s.URL+"/octocat/hello-world.git", dst)
+		if b, e := c.CombinedOutput(); e != nil {
+			t.Fatalf("clone: %v %s", e, b)
+		}
+	}
+	first, second := filepath.Join(t.TempDir(), "first"), filepath.Join(t.TempDir(), "second")
+	clone(first)
+	clone(second)
+	commit := func(dir, msg string) {
+		c := exec.Command("git", "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "--allow-empty", "-m", msg)
+		c.Dir = dir
+		if b, e := c.CombinedOutput(); e != nil {
+			t.Fatalf("commit: %v %s", e, b)
+		}
+	}
+	commit(first, "accepted CAS push")
+	push := exec.Command("git", "push", "origin", "main")
+	push.Dir = first
+	if b, e := push.CombinedOutput(); e != nil {
+		t.Fatalf("matching old SHA push: %v %s", e, b)
+	}
+	commit(second, "stale CAS push")
+	stale := exec.Command("git", "push", "origin", "main")
+	stale.Dir = second
+	if b, e := stale.CombinedOutput(); e == nil {
+		t.Fatalf("stale push unexpectedly succeeded: %s", b)
+	}
+	got, err := exec.Command("git", "--git-dir="+filepath.Join(f.gitRoot, "octocat", "hello-world.git"), "log", "-1", "--format=%s", "refs/heads/main").Output()
+	if err != nil || strings.TrimSpace(string(got)) != "accepted CAS push" {
+		t.Fatalf("stale push changed ref: %q %v", got, err)
 	}
 }

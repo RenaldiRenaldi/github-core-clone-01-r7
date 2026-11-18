@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -35,6 +36,20 @@ func (f *forge) serveGit(w http.ResponseWriter, r *http.Request) bool {
 	if _, err := os.Stat(project); err != nil {
 		http.NotFound(w, r)
 		return true
+	}
+	var receiveBody []byte
+	if strings.HasSuffix(parts[1], "/git-receive-pack") {
+		var err error
+		receiveBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "unable to read receive-pack request", 400)
+			return true
+		}
+		if stale, ref := f.staleReceivePack(project, receiveBody); stale {
+			writeJSON(w, 409, map[string]string{"message": "stale ref update rejected", "ref": ref})
+			return true
+		}
+		r.Body = io.NopCloser(bytes.NewReader(receiveBody))
 	}
 	env := append(os.Environ(), "GIT_PROJECT_ROOT="+f.gitRoot, "GIT_HTTP_EXPORT_ALL=1", "PATH_INFO=/"+path, "REMOTE_USER=", "REQUEST_METHOD="+r.Method, "QUERY_STRING="+r.URL.RawQuery, "CONTENT_TYPE="+r.Header.Get("Content-Type"), "CONTENT_LENGTH="+r.Header.Get("Content-Length"))
 	if proto := r.Header.Get("Git-Protocol"); proto != "" {
@@ -74,6 +89,34 @@ func (f *forge) serveGit(w http.ResponseWriter, r *http.Request) bool {
 	}
 	w.Write(out[i+sep:])
 	return true
+}
+
+// Git's receive-pack command list starts with old/new/ref pkt-lines. Check all
+// advertised old values before invoking the backend, so a stale multi-ref push
+// cannot partially update any refs.
+func (f *forge) staleReceivePack(repoPath string, body []byte) (bool, string) {
+	r := bytes.NewReader(body)
+	for {
+		line, err := DecodePktLine(r)
+		if err != nil || line == nil {
+			return false, ""
+		}
+		if i := bytes.IndexByte(line, 0); i >= 0 {
+			line = line[:i]
+		}
+		fields := strings.Fields(string(line))
+		if len(fields) < 3 {
+			return false, ""
+		}
+		old, ref := fields[0], fields[2]
+		current, err := exec.Command("git", "--git-dir="+repoPath, "rev-parse", "--verify", ref).Output()
+		if err != nil {
+			current = []byte("0000000000000000000000000000000000000000")
+		}
+		if strings.TrimSpace(string(current)) != old {
+			return true, ref
+		}
+	}
 }
 
 // seedDemo creates a deterministic bare repository with a short history.

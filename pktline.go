@@ -46,7 +46,7 @@ func EncodeControlPacket(kind PacketKind) []byte {
 	}
 }
 
-// DecodePktLine consumes one complete pkt-line; control markers return nil.
+// DecodePktLine consumes one complete pkt-line; all three control markers return nil.
 func DecodePktLine(r io.Reader) ([]byte, error) {
 	header := make([]byte, 4)
 	if _, err := io.ReadFull(r, header); err != nil {

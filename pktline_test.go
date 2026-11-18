@@ -98,3 +98,9 @@ func TestPktLineRejectsOversizePayload(t *testing.T) {
 		t.Fatalf("oversize packet length = %d, want nil", len(got))
 	}
 }
+
+func TestPktLineHeaderUsesLowercaseHex(t *testing.T) {
+	if got := string(EncodePktLine([]byte("Git"))[:4]); got != "0007" {
+		t.Fatalf("header = %q", got)
+	}
+}

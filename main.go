@@ -12,13 +12,23 @@ import (
 )
 
 type item struct {
-	Number int      `json:"number"`
-	Title  string   `json:"title"`
-	Body   string   `json:"body"`
-	State  string   `json:"state"`
-	Labels []string `json:"labels,omitempty"`
-	Head   string   `json:"head,omitempty"`
-	Base   string   `json:"base,omitempty"`
+	Number  int      `json:"number"`
+	Title   string   `json:"title"`
+	Body    string   `json:"body"`
+	State   string   `json:"state"`
+	Labels  []string `json:"labels,omitempty"`
+	Head    string   `json:"head,omitempty"`
+	Base    string   `json:"base,omitempty"`
+	Reviews []review `json:"reviews,omitempty"`
+}
+type review struct {
+	Reviewer string `json:"reviewer"`
+	State    string `json:"state"`
+	Body     string `json:"body"`
+}
+type protection struct {
+	RequiredApprovingReviews int  `json:"required_approving_reviews"`
+	RequirePullRequest       bool `json:"require_pull_request"`
 }
 type repo struct {
 	Owner       string  `json:"-"`
@@ -38,6 +48,8 @@ type forge struct {
 	repos           map[string]*repo
 	next, issue, pr int
 	gitRoot         string
+	reviews         map[string][]review
+	protections     map[string]protection
 }
 
 func (f *forge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -136,6 +148,9 @@ func (f *forge) repoAPI(w http.ResponseWriter, r *http.Request) {
 	q := f.repos[key]
 	if q == nil {
 		writeJSON(w, 404, map[string]string{"message": "Not Found"})
+		return
+	}
+	if f.specialRepoAPI(w, r, q, p) {
 		return
 	}
 	if len(p) == 5 {

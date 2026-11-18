@@ -78,3 +78,38 @@ $ curl -sS -X POST http://127.0.0.1:46353/mcp -H 'Content-Type: application/json
 
 API tests: `go test ./...` and `go test -race ./...` pass, including issue
 create/get, PR create/list, GraphQL repository selection, and an MCP tool call.
+
+## Three-way merges, CAS pushes, reviews, and branch protection
+
+PR merges compute a merge base and compare the base, head, and current base
+trees in Go. Clean merges create a two-parent commit and update the base ref
+with Git's expected-old-value `update-ref`; conflicts return HTTP 409 and list
+the conflicting paths. Receive-pack command lines are checked against current
+ref SHAs before Git's atomic receive transaction runs. The REST ref endpoint
+returns the current SHA for clients performing compare-and-swap updates.
+Reviews and branch protection rules live in the shared in-memory store.
+
+Live curl checks against a server on port 37573 (branches were created through
+the server's Git smart HTTP endpoints):
+
+```text
+$ curl -sS http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/git/refs/heads/main
+{"ref":"refs/heads/main","sha":"9d7b4e6a9682052342bb93ab80414777c751899c"}
+$ curl -sS -X POST http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/pulls -H 'Content-Type: application/json' -d '{"title":"Curl clean merge","head":"curl-clean","base":"main"}'
+{"number":2,"title":"Curl clean merge","body":"","state":"open","head":"curl-clean","base":"main"}
+$ curl -sS -X POST http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/pulls/2/merge -H 'Content-Type: application/json' -d '{}'
+{"merged":"true","sha":"d358f05c22a86b4189dc00d7c856c49b591c8ed4"}
+$ curl -sS -X PUT http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/branches/main/protection -H 'Content-Type: application/json' -d '{"required_approving_reviews":1,"require_pull_request":true}'
+{"required_approving_reviews":1,"require_pull_request":true}
+$ curl -sS -w '\nHTTP %{http_code}\n' -X POST http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/pulls/3/merge -H 'Content-Type: application/json' -d '{}'
+{"message":"branch protection requires an approving review"}
+HTTP 403
+$ curl -sS -X PUT http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/branches/main/protection -H 'Content-Type: application/json' -d '{"required_approving_reviews":0,"require_pull_request":true}'
+{"required_approving_reviews":0,"require_pull_request":true}
+$ curl -sS -w '\nHTTP %{http_code}\n' -X POST http://127.0.0.1:37573/api/v3/repos/octocat/hello-world/pulls/4/merge -H 'Content-Type: application/json' -d '{}'
+{"conflicting_paths":["hello.txt"],"message":"merge conflict"}
+HTTP 409
+```
+
+The tests cover clean and conflicting three-way merges, stale and matching
+receive-pack old SHA values, and merges blocked until a review approves them.
