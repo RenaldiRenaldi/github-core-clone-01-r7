@@ -85,7 +85,7 @@ func (f *forge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/v3/user":
 		login := os.Getenv("MAKEFUN_LOGIN")
 		if login == "" {
-			login = "octocat"
+			login = "adaiversen"
 		}
 		writeJSON(w, 200, map[string]any{"login": login, "id": 1, "name": "Demo User"})
 	case "/api/v3/user/repos":
@@ -119,7 +119,7 @@ func (f *forge) userRepos(w http.ResponseWriter, r *http.Request) {
 		in := decode(r)
 		owner := os.Getenv("MAKEFUN_LOGIN")
 		if owner == "" {
-			owner = "octocat"
+			owner = "adaiversen"
 		}
 		name, _ := in["name"].(string)
 		if name == "" {
@@ -413,6 +413,7 @@ func (f *forge) seedAPI() {
 	f.pr = 1
 	f.repos["octocat/hello-world"] = &repo{Owner: "octocat", Name: "hello-world", Description: "A tiny demo repository.", ID: 1, Issues: []*item{{Number: 1, Title: "Welcome", Body: "Seed issue", State: "open", Labels: []string{"demo"}}}, PRs: []*item{{Number: 1, Title: "Add greeting", Body: "Seed pull request", State: "open", Head: "feature", Base: "main"}}}
 	f.repos["octocat/notes"] = &repo{Owner: "octocat", Name: "notes", Description: "Demo notes.", ID: 2}
+	f.repos["adaiversen/hello-world"] = &repo{Owner: "adaiversen", Name: "hello-world", Description: "A tiny demo repository.", ID: 3, Issues: []*item{{Number: 1, Title: "Welcome", Body: "Seed issue", State: "open"}}, PRs: []*item{{Number: 1, Title: "Add greeting", Body: "Seed pull request", State: "open", Head: "feature", Base: "main"}}}
 }
 func main() {
 	root, err := os.MkdirTemp("", "r7-git-data-")

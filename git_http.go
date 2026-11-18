@@ -274,34 +274,39 @@ func (f *forge) seedDemo() {
 	if err := store.UpdateRefIn("octocat/hello-world", "refs/heads/main", second, ""); err != nil {
 		panic(err)
 	}
-	// Keep the existing CGI-backed transfer and merge paths usable without
-	// invoking Git during startup: publish canonical loose files directly.
-	bare := filepath.Join(f.gitRoot, "octocat", "hello-world.git")
-	if err := os.MkdirAll(filepath.Join(bare, "objects"), 0755); err != nil {
-		panic(err)
-	}
-	for id, encoded := range store.objects {
-		dir := filepath.Join(bare, "objects", id[:2])
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			panic(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, id[2:]), encoded, 0444); err != nil {
-			panic(err)
-		}
-	}
-	refPath := filepath.Join(bare, "refs", "heads", "main")
-	if err := os.MkdirAll(filepath.Dir(refPath), 0755); err != nil {
-		panic(err)
-	}
-	if err := os.WriteFile(refPath, []byte(second+"\n"), 0644); err != nil {
-		panic(err)
-	}
-	if err := os.WriteFile(filepath.Join(bare, "HEAD"), []byte("ref: refs/heads/main\n"), 0644); err != nil {
-		panic(err)
-	}
 	config := "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n[http]\n\treceivepack = true\n"
-	if err := os.WriteFile(filepath.Join(bare, "config"), []byte(config), 0644); err != nil {
-		panic(err)
+	for _, owner := range []string{"octocat", "adaiversen"} {
+		if owner == "adaiversen" {
+			if err := store.UpdateRefIn("adaiversen/hello-world", "refs/heads/main", second, ""); err != nil {
+				panic(err)
+			}
+		}
+		bare := filepath.Join(f.gitRoot, owner, "hello-world.git")
+		if err := os.MkdirAll(filepath.Join(bare, "objects"), 0755); err != nil {
+			panic(err)
+		}
+		for id, encoded := range store.objects {
+			dir := filepath.Join(bare, "objects", id[:2])
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				panic(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, id[2:]), encoded, 0444); err != nil {
+				panic(err)
+			}
+		}
+		refPath := filepath.Join(bare, "refs", "heads", "main")
+		if err := os.MkdirAll(filepath.Dir(refPath), 0755); err != nil {
+			panic(err)
+		}
+		if err := os.WriteFile(refPath, []byte(second+"\n"), 0644); err != nil {
+			panic(err)
+		}
+		if err := os.WriteFile(filepath.Join(bare, "HEAD"), []byte("ref: refs/heads/main\n"), 0644); err != nil {
+			panic(err)
+		}
+		if err := os.WriteFile(filepath.Join(bare, "config"), []byte(config), 0644); err != nil {
+			panic(err)
+		}
 	}
 }
 
