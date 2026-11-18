@@ -52,6 +52,46 @@ Checks: `go test ./...` and `go test -race ./...` both pass. The focused
 handler tests verify the upload-pack advertisement and clone a checkout through
 an in-process HTTP server.
 
+## Deterministic state export
+
+`GET /export` emits canonical JSON for repositories, loose refs, issues, pull
+requests, reviews, and branch protection. Repository names and map keys are
+sorted, issue and pull request order follows their stable creation order, and
+the export contains no timestamps or generated values. Check it on a running
+server with `curl -fsS http://127.0.0.1:$PORT/export | sha256sum`; two
+consecutive exports of the same state returned
+`08d325a2d00218ad3ece853c4bbdef133d82178233e8ddcbc7feab9e91620763` both
+times.
+
+## Loopback measurements
+
+Measured on this checkout with Go 1.22.2, a server on loopback, one persistent
+HTTP connection per workload, and sequential requests, following R4's TCP
+benchmark shape. Repository and issue reads used 2,000 requests, ref ads 200,
+and writes 200. The R4 values below used a different host and implementation;
+R3/R5 rows are only populated where their README has measurements.
+
+| Operation | Requests/sec | Elapsed |
+|---|---:|---:|
+| Repository reads | 8,883 | 225.15 ms / 2,000 |
+| Issue reads | 10,422 | 191.89 ms / 2,000 |
+| Ref advertisements | 133 | 1,509.27 ms / 200 |
+| Issue writes | 2,476 | 80.77 ms / 200 |
+| Cached clone fetches | Not measured | The current CGI-backed handler starts `git http-backend` per request; it is not comparable to R4's in-process cached pack path. |
+
+| Workload | R3 | R4 | R5 | R7 |
+|---|---:|---:|---:|---:|
+| Repository reads/sec | — | 14,216 | — | 8,883 |
+| Ref advertisements/sec | — | 16,376 | — | 133 |
+| Cached fetches/sec | — | 12,645 | — | Not measured |
+| 200 issue writes | 83.002 ms | 97.893 ms | — | 80.77 ms |
+
+R4's issue writes took 18% longer than R3's. R7's 200 writes took 80.77 ms
+with no per-request store disk I/O, beating the R4 value in this run. The
+forge-wide mutex serializes API mutations and reads. R7's ref advertisement
+path is slow because each request starts `git http-backend`; the clone fetch
+workload was not measured and is a known performance limitation.
+
 ## REST, GraphQL, MCP, and web UI
 
 The server shares one mutex-protected in-memory repository, issue, and pull

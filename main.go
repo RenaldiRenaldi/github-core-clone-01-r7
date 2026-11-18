@@ -61,6 +61,10 @@ func (f *forge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
+	if r.URL.Path == "/export" {
+		f.exportState(w)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/mcp" {
 		tok := os.Getenv("MAKEFUN_SHOP_TOKEN")
 		if tok != "" && r.Header.Get("Authorization") != "Bearer "+tok && r.Header.Get("Authorization") != "token "+tok {
